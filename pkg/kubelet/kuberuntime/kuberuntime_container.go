@@ -24,6 +24,7 @@ import (
 	"math/rand"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -144,14 +145,25 @@ func (m *kubeGenericRuntimeManager) startContainer(podSandboxID string, podSandb
 		}, ref)
 	}
 
-	// Step 3: start the container.
-	err = m.runtimeService.StartContainer(containerID)
-	if err != nil {
-		s, _ := grpcstatus.FromError(err)
-		m.recordContainerEvent(pod, container, containerID, v1.EventTypeWarning, events.FailedToStartContainer, "Error: %v", s.Message())
-		return s.Message(), kubecontainer.ErrRunContainer
+	checkpoint := getCheckpoint(container.Name, containerID, pod)
+	if checkpoint != "" {
+		if err := restoreCheckpoint(checkpoint, containerID); err != nil {
+			klog.Errorf("Failed to restore checkpoint %s for container %s of pod %s/%s (%s): %v. Falling back to starting the container from scratch.", checkpoint, container.Name, pod.Namespace, pod.Name, pod.UID, err)
+			// Reset the checkpoint so that we fall back to starting the
+			// container from scratch.
+			checkpoint = ""
+		} else {
+			m.recordContainerEvent(pod, container, containerID, v1.EventTypeNormal, events.StartedContainer, fmt.Sprintf("Started container %s from checkpoint", container.Name))
+		}
 	}
-	m.recordContainerEvent(pod, container, containerID, v1.EventTypeNormal, events.StartedContainer, fmt.Sprintf("Started container %s", container.Name))
+	if checkpoint == "" {
+		if err := m.runtimeService.StartContainer(containerID); err != nil {
+			s, _ := grpcstatus.FromError(err)
+			m.recordContainerEvent(pod, container, containerID, v1.EventTypeWarning, events.FailedToStartContainer, "Error: %v", s.Message())
+			return s.Message(), kubecontainer.ErrRunContainer
+		}
+		m.recordContainerEvent(pod, container, containerID, v1.EventTypeNormal, events.StartedContainer, fmt.Sprintf("Started container %s", container.Name))
+	}
 
 	// Symlink container logs to the legacy container log location for cluster logging
 	// support.
@@ -190,6 +202,47 @@ func (m *kubeGenericRuntimeManager) startContainer(podSandboxID string, podSandb
 	}
 
 	return "", nil
+}
+
+func getCheckpoint(containerName, containerID string, pod *v1.Pod) string {
+	if !wantCheckpoint(pod) {
+		return ""
+	}
+
+	// Check if a checkpoint for the container exists.
+	checkpointName := fmt.Sprintf("%s-%s-%s", containerName, pod.Name, string(pod.GetOwnerReferences()[0].UID))
+	checkpointPath := fmt.Sprintf("/vagrant/%s", checkpointName)
+	if _, err := os.Stat(checkpointPath); err != nil {
+		if os.IsNotExist(err) {
+			klog.V(4).Infof("Checkpoint for container %s from pod %s/%s (%s) not found", containerName, pod.Namespace, pod.Name, pod.UID)
+		} else {
+			klog.Errorf("Failed to assess existence of checkpoint for container %s from pod %s/%s (%s): %v", containerName, pod.Namespace, pod.Name, pod.UID, err)
+		}
+		return ""
+	}
+
+	// Restoring a Docker container from a checkpoint at a custom location is
+	// currently broken, hence we have to manually move the checkpoint to the
+	// container's dir.
+	containerCheckpointPath := fmt.Sprintf("/var/lib/docker/containers/%s/checkpoints/%s", containerID, checkpointName)
+	copyCheckpointCmd := exec.Command("cp",
+		"-r",
+		checkpointPath,
+		containerCheckpointPath)
+	if msg, err := copyCheckpointCmd.CombinedOutput(); err != nil {
+		klog.Errorf("Failed to copy checkpoint %s to %s for container %s of pod %s/%s (%s): %v: %s", checkpointPath, containerCheckpointPath, containerName, pod.Namespace, pod.Name, pod.UID, err, string(msg))
+		return ""
+	}
+
+	return checkpointName
+}
+
+func restoreCheckpoint(checkpoint, container string) error {
+	restoreContainerCmd := exec.Command("docker", "start", "--checkpoint", checkpoint, container)
+	if msg, err := restoreContainerCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("%v: %s", err, string(msg))
+	}
+	return nil
 }
 
 // generateContainerConfig generates container config for kubelet runtime v1.
@@ -585,6 +638,12 @@ func (m *kubeGenericRuntimeManager) killContainer(pod *v1.Pod, containerID kubec
 
 	klog.V(2).Infof("Killing container %q with %d second grace period", containerID.String(), gracePeriod)
 
+	if wantCheckpoint(pod) {
+		if err := takeCheckpoint(pod, containerName, containerID.ID); err != nil {
+			return err
+		}
+	}
+
 	err := m.runtimeService.StopContainer(containerID.ID, gracePeriod)
 	if err != nil {
 		klog.Errorf("Container %q termination failed with gracePeriod %d: %v", containerID.String(), gracePeriod, err)
@@ -595,6 +654,19 @@ func (m *kubeGenericRuntimeManager) killContainer(pod *v1.Pod, containerID kubec
 	m.containerRefManager.ClearRef(containerID)
 
 	return err
+}
+
+func wantCheckpoint(pod *v1.Pod) bool {
+	return pod.GetLabels()["want-checkpoint"] == "true"
+}
+
+func takeCheckpoint(pod *v1.Pod, containerName, containerID string) error {
+	checkpointName := containerName + "-" + pod.Name + "-" + string(pod.GetOwnerReferences()[0].UID)
+	checkpointCmd := exec.Command("docker", "checkpoint", "create", "--leave-running", "--checkpoint-dir", "/vagrant", containerID, checkpointName)
+	if msg, err := checkpointCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to checkpoint container %s in pod %s/%s (%s): %v: %s", pod.Namespace, pod.Name, pod.UID, containerName, err, string(msg))
+	}
+	return nil
 }
 
 // killContainersWithSyncResult kills all pod's containers with sync results.
