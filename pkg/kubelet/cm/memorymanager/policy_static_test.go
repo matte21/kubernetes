@@ -140,7 +140,7 @@ func initTests(t *testing.T, testCase *testStaticPolicy, hint *topologymanager.T
 		manager = topologymanager.NewFakeManagerWithHint(hint)
 	}
 
-	p, err := NewPolicyStatic(testCase.machineInfo, testCase.systemReserved, manager)
+	p, err := NewPolicyStatic(NormalMemMgrName, testCase.machineInfo, testCase.systemReserved, manager)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -4005,7 +4005,7 @@ func Test_getPodRequestedResources(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.description, func(t *testing.T) {
-			actual, err := getPodRequestedResources(tc.pod)
+			actual, err := getPodRequestedResources(NormalMemMgrName, tc.pod)
 			if err != nil {
 				t.Fatalf("Unexpected error: %v", err)
 			}
