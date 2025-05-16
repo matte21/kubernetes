@@ -429,7 +429,17 @@ func (p *staticPolicy) GetTopologyHints(s state.State, pod *v1.Pod, container *v
 		return nil
 	}
 
-	requestedResources, err := getRequestedResources(p.mgrName, pod, container)
+	var requestedResources map[v1.ResourceName]uint64
+	var err error
+	if p.mgrName == NormalMemMgrName {
+		// If we're here, this memory manager must generate hints to satisfy the requests for
+		// "normal" memory.
+		requestedResources, err = getRequestedResources(p.mgrName, pod, container)
+	} else {
+		// If we're here, this memory manager must generate hints to satisfy the requests for
+		// far memory.
+		requestedResources, err = getFarMemoryRequest(pod, container)
+	}
 	if err != nil {
 		klog.ErrorS(err, "Failed to get container requested resources", "pod", klog.KObj(pod), "podUID", pod.UID, "containerName", container.Name)
 		return nil
@@ -443,7 +453,11 @@ func (p *staticPolicy) GetTopologyHints(s state.State, pod *v1.Pod, container *v
 		return regenerateHints(pod, container, containerBlocks, requestedResources)
 	}
 
-	return p.calculateHints(s.GetMachineState(), pod, requestedResources)
+	if p.mgrName == NormalMemMgrName {
+		return p.calculateHints(s.GetMachineState(), pod, requestedResources)
+	}
+
+	return p.calculateFarMemHints(s.GetMachineState(), pod, requestedResources[v1.ResourceMemory])
 }
 
 func getRequestedResources(mgrName string, pod *v1.Pod, container *v1.Container) (map[v1.ResourceName]uint64, error) {
@@ -475,6 +489,32 @@ func getRequestedResources(mgrName string, pod *v1.Pod, container *v1.Container)
 		requestedResources[resourceName] = uint64(requestedSize)
 	}
 	return requestedResources, nil
+}
+
+// TODO: implement in-place vertical scaling.
+func getFarMemoryRequest(pod *v1.Pod, container *v1.Container) (map[v1.ResourceName]uint64, error) {
+	farMemAnnotationKey := container.Name + "/far-mem"
+
+	farMemAnnotationVal, ok := pod.Annotations[farMemAnnotationKey]
+	if !ok {
+		return map[v1.ResourceName]uint64{
+			v1.ResourceMemory: 0,
+		}, nil
+	}
+
+	farMemQty, err := resource.ParseQuantity(farMemAnnotationVal)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse far memory annotation %s: %s", farMemAnnotationVal, err)
+	}
+
+	farMemRequest, ok := farMemQty.AsInt64()
+	if !ok {
+		return nil, fmt.Errorf("failed to represent as int64 far memory quantity parsed from annotation %s", farMemAnnotationKey)
+	}
+
+	return map[v1.ResourceName]uint64{
+		v1.ResourceMemory: uint64(farMemRequest),
+	}, nil
 }
 
 func (p *staticPolicy) calculateHints(machineState state.NUMANodeMap, pod *v1.Pod, requestedResources map[v1.ResourceName]uint64) map[string][]topologymanager.TopologyHint {
@@ -570,6 +610,11 @@ func (p *staticPolicy) calculateHints(machineState state.NUMANodeMap, pod *v1.Po
 	}
 
 	return hints
+}
+
+func (p *staticPolicy) calculateFarMemHints(machineState state.NUMANodeMap, pod *v1.Pod, requestedFarMem uint64) map[string][]topologymanager.TopologyHint {
+	// TODO: implement me!
+	panic("IMPLEMENT ME!")
 }
 
 func (p *staticPolicy) isHintPreferred(maskBits []int, minAffinitySize int) bool {
