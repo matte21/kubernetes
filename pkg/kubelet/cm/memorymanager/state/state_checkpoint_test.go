@@ -58,9 +58,9 @@ func TestCheckpointStateRestore(t *testing.T) {
 			"Restore valid checkpoint",
 			`{
 				"policyName":"static",
-				"machineState":{"0":{"numberOfAssignments":0,"memoryMap":{"memory":{"total":2048,"systemReserved":512,"allocatable":1536,"reserved":512,"free":1024}},"cells":[]}},
+				"machineState":{"0":{"numberOfAssignments":0,"memoryMap":{"memory":{"total":2048,"systemReserved":512,"allocatable":1536,"reserved":512,"free":1024}},"cells":[],"isZNUMA":false}},
 				"entries":{"pod":{"container1":[{"numaAffinity":[0],"type":"memory","size":512}]}},
-				"checksum": 4215593881
+				"checksum": 1137025684
 			}`,
 			"",
 			&stateMemory{

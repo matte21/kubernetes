@@ -1009,6 +1009,9 @@ func TestStaticPolicyStart(t *testing.T) {
 								NumPages: 1,
 							},
 						},
+						Cores: []cadvisorapi.Core{
+							{Id: 0},
+						},
 					},
 					{
 						Id:     1,
@@ -1019,6 +1022,9 @@ func TestStaticPolicyStart(t *testing.T) {
 								PageSize: pageSize1Gb,
 								NumPages: 1,
 							},
+						},
+						Cores: []cadvisorapi.Core{
+							{Id: 1},
 						},
 					},
 				},
@@ -1135,10 +1141,16 @@ func TestStaticPolicyStart(t *testing.T) {
 					{
 						Id:     0,
 						Memory: 240 * mb,
+						Cores: []cadvisorapi.Core{
+							{Id: 0},
+						},
 					},
 					{
 						Id:     1,
 						Memory: 240 * mb,
+						Cores: []cadvisorapi.Core{
+							{Id: 1},
+						},
 					},
 				},
 			},

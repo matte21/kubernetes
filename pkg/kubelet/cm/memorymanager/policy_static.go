@@ -678,6 +678,11 @@ func areMachineStatesEqual(ms1, ms2 state.NUMANodeMap) bool {
 			return false
 		}
 
+		if nodeState1.IsZNUMA != nodeState2.IsZNUMA {
+			klog.InfoS("Node state had different view of whether node is zNUMA or not.", "IsZNUMA1", nodeState1.IsZNUMA, "IsZNUMA2", nodeState2.IsZNUMA)
+			return false
+		}
+
 		if nodeState1.NumberOfAssignments != nodeState2.NumberOfAssignments {
 			klog.InfoS("Node state had a different number of memory assignments.", "assignment1", nodeState1.NumberOfAssignments, "assignment2", nodeState2.NumberOfAssignments)
 			return false
@@ -752,6 +757,7 @@ func (p *staticPolicy) getDefaultMachineState() state.NUMANodeMap {
 			NumberOfAssignments: 0,
 			MemoryMap:           map[v1.ResourceName]*state.MemoryTable{},
 			Cells:               []int{node.Id},
+			IsZNUMA:             len(node.Cores) == 0,
 		}
 
 		// fill memory table with huge pages values
