@@ -53,6 +53,7 @@ import (
 	"k8s.io/kubernetes/pkg/kubelet/cm/cpumanager"
 	"k8s.io/kubernetes/pkg/kubelet/cm/devicemanager"
 	"k8s.io/kubernetes/pkg/kubelet/cm/dra"
+	"k8s.io/kubernetes/pkg/kubelet/cm/farmemtopologymanager"
 	"k8s.io/kubernetes/pkg/kubelet/cm/memorymanager"
 	memorymanagerstate "k8s.io/kubernetes/pkg/kubelet/cm/memorymanager/state"
 	"k8s.io/kubernetes/pkg/kubelet/cm/resourceupdates"
@@ -289,13 +290,22 @@ func NewContainerManager(mountUtil mount.Interface, cadvisorInterface cadvisor.I
 		qosContainerManager: qosContainerManager,
 	}
 
-	cm.topologyManager, err = topologymanager.NewManager(
-		machineInfo.Topology,
-		nodeConfig.TopologyManagerPolicy,
-		nodeConfig.TopologyManagerScope,
-		nodeConfig.TopologyManagerPolicyOptions,
-	)
-
+	if nodeConfig.TopologyManagerPolicy == "unifiedFarMem" {
+		cm.topologyManager, err = farmemtopologymanager.New(
+			machineInfo,
+			nodeConfig.NodeAllocatableConfig.ReservedSystemCPUs,
+			nodeConfig.MemoryManagerReservedMemory,
+			cm.GetNodeAllocatableReservation(),
+			nodeConfig.CPUManagerReconcilePeriod,
+		)
+	} else {
+		cm.topologyManager, err = topologymanager.NewManager(
+			machineInfo.Topology,
+			nodeConfig.TopologyManagerPolicy,
+			nodeConfig.TopologyManagerScope,
+			nodeConfig.TopologyManagerPolicyOptions,
+		)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -317,36 +327,41 @@ func NewContainerManager(mountUtil mount.Interface, cadvisorInterface cadvisor.I
 	}
 	cm.kubeClient = kubeClient
 
-	// Initialize CPU manager
-	cm.cpuManager, err = cpumanager.NewManager(
-		nodeConfig.CPUManagerPolicy,
-		nodeConfig.CPUManagerPolicyOptions,
-		nodeConfig.CPUManagerReconcilePeriod,
-		machineInfo,
-		nodeConfig.NodeAllocatableConfig.ReservedSystemCPUs,
-		cm.GetNodeAllocatableReservation(),
-		nodeConfig.KubeletRootDir,
-		cm.topologyManager,
-	)
-	if err != nil {
-		klog.ErrorS(err, "Failed to initialize cpu manager")
-		return nil, err
-	}
-	cm.topologyManager.AddHintProvider(cm.cpuManager)
+	if nodeConfig.TopologyManagerPolicy == "unifiedFarMem" {
+		cm.cpuManager = cpumanager.NewFarMemBasedCPUManager(cm.topologyManager.(*farmemtopologymanager.Manager))
+		cm.memoryManager = memorymanager.NewFarMemBasedMemoryManager(cm.topologyManager.(*farmemtopologymanager.Manager))
+	} else {
+		// Initialize CPU manager
+		cm.cpuManager, err = cpumanager.NewManager(
+			nodeConfig.CPUManagerPolicy,
+			nodeConfig.CPUManagerPolicyOptions,
+			nodeConfig.CPUManagerReconcilePeriod,
+			machineInfo,
+			nodeConfig.NodeAllocatableConfig.ReservedSystemCPUs,
+			cm.GetNodeAllocatableReservation(),
+			nodeConfig.KubeletRootDir,
+			cm.topologyManager,
+		)
+		if err != nil {
+			klog.ErrorS(err, "Failed to initialize cpu manager")
+			return nil, err
+		}
+		cm.topologyManager.AddHintProvider(cm.cpuManager)
 
-	cm.memoryManager, err = memorymanager.NewManager(
-		nodeConfig.MemoryManagerPolicy,
-		machineInfo,
-		cm.GetNodeAllocatableReservation(),
-		nodeConfig.MemoryManagerReservedMemory,
-		nodeConfig.KubeletRootDir,
-		cm.topologyManager,
-	)
-	if err != nil {
-		klog.ErrorS(err, "Failed to initialize memory manager")
-		return nil, err
+		cm.memoryManager, err = memorymanager.NewManager(
+			nodeConfig.MemoryManagerPolicy,
+			machineInfo,
+			cm.GetNodeAllocatableReservation(),
+			nodeConfig.MemoryManagerReservedMemory,
+			nodeConfig.KubeletRootDir,
+			cm.topologyManager,
+		)
+		if err != nil {
+			klog.ErrorS(err, "Failed to initialize memory manager")
+			return nil, err
+		}
+		cm.topologyManager.AddHintProvider(cm.memoryManager)
 	}
-	cm.topologyManager.AddHintProvider(cm.memoryManager)
 
 	return cm, nil
 }
@@ -582,16 +597,20 @@ func (cm *containerManagerImpl) Start(ctx context.Context, node *v1.Node,
 		}
 	}
 
-	// Initialize CPU manager
-	err := cm.cpuManager.Start(cpumanager.ActivePodsFunc(activePods), sourcesReady, podStatusProvider, runtimeService, containerMap.Clone())
-	if err != nil {
-		return fmt.Errorf("start cpu manager error: %w", err)
-	}
+	if fmm, ok := cm.topologyManager.(*farmemtopologymanager.Manager); ok {
+		fmm.Start(farmemtopologymanager.ActivePodsFunc(activePods), podStatusProvider, runtimeService)
+	} else {
+		// Initialize CPU manager
+		err := cm.cpuManager.Start(cpumanager.ActivePodsFunc(activePods), sourcesReady, podStatusProvider, runtimeService, containerMap.Clone())
+		if err != nil {
+			return fmt.Errorf("start cpu manager error: %w", err)
+		}
 
-	// Initialize memory manager
-	err = cm.memoryManager.Start(memorymanager.ActivePodsFunc(activePods), sourcesReady, podStatusProvider, runtimeService, containerMap.Clone())
-	if err != nil {
-		return fmt.Errorf("start memory manager error: %w", err)
+		// Initialize memory manager
+		err = cm.memoryManager.Start(memorymanager.ActivePodsFunc(activePods), sourcesReady, podStatusProvider, runtimeService, containerMap.Clone())
+		if err != nil {
+			return fmt.Errorf("start memory manager error: %w", err)
+		}
 	}
 
 	// cache the node Info including resource capacity and
