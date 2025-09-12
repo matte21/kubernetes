@@ -30,11 +30,11 @@ import (
 
 type ActivePodsFunc func() []*v1.Pod
 
-// allocation describes the allocation for a container: i.e. from  which NUMA nodes the container's
+// Allocation describes the Allocation for a container: i.e. from  which NUMA nodes the container's
 // CPUs and memory will come from, and how much the container is allowed to use.
-type allocation struct {
-	cpus                cpuset.CPUSet
-	perNUMANodeMemBytes map[int]uint64
+type Allocation struct {
+	CPUs                cpuset.CPUSet
+	PerNUMANodeMemBytes map[int]uint64
 }
 
 type reconciledContainer struct {
@@ -52,7 +52,7 @@ type Manager struct {
 	podMap containermap.ContainerMap
 
 	// allocs maps podUIDs to container names to the allocation for the container with that name.
-	allocs map[string]map[string]allocation
+	allocs map[string]map[string]Allocation
 
 	topo *topology
 
@@ -112,7 +112,7 @@ func New(mi *cadvisor.MachineInfo,
 
 	return &Manager{
 		podMap:          containermap.NewContainerMap(),
-		allocs:          make(map[string]map[string]allocation),
+		allocs:          make(map[string]map[string]Allocation),
 		topo:            topo,
 		reconcilePeriod: reconcilePeriod,
 	}, nil
@@ -263,23 +263,23 @@ func (m *Manager) Admit(attrs *lifecycle.PodAdmitAttributes) lifecycle.PodAdmitR
 			"nNUMAs", nNUMAsCombo, "zNUMAs", zNUMAsCombo)
 
 		// Now, do the allocation.
-		alloc := allocation{
-			cpus:                cpuset.New(),
-			perNUMANodeMemBytes: make(map[int]uint64, len(zNUMAsCombo)+len(nNUMAsCombo)),
+		alloc := Allocation{
+			CPUs:                cpuset.New(),
+			PerNUMANodeMemBytes: make(map[int]uint64, len(zNUMAsCombo)+len(nNUMAsCombo)),
 		}
 
 		// Allocate CPUs.
 		cpuGivers := make(map[int]struct{}, len(nNUMAsCombo))
 		for _, nID := range nNUMAsCombo {
 			n := m.topo.NNUMANodes[nID]
-			if alloc.cpus.Size() < reqCPUs && !n.FreeCPUs.IsEmpty() {
+			if alloc.CPUs.Size() < reqCPUs && !n.FreeCPUs.IsEmpty() {
 				cpuGivers[nID] = struct{}{}
 				var cs cpuset.CPUSet
-				if alloc.cpus.Size()+n.FreeCPUs.Size() > reqCPUs {
-					cpus := make([]int, 0, reqCPUs-alloc.cpus.Size())
+				if alloc.CPUs.Size()+n.FreeCPUs.Size() > reqCPUs {
+					cpus := make([]int, 0, reqCPUs-alloc.CPUs.Size())
 					for _, cpu := range n.FreeCPUs.List() {
 						cpus = append(cpus, cpu)
-						if len(cpus)+alloc.cpus.Size() == reqCPUs {
+						if len(cpus)+alloc.CPUs.Size() == reqCPUs {
 							break
 						}
 					}
@@ -287,7 +287,7 @@ func (m *Manager) Admit(attrs *lifecycle.PodAdmitAttributes) lifecycle.PodAdmitR
 				} else {
 					cs = n.FreeCPUs
 				}
-				alloc.cpus = alloc.cpus.Union(cs)
+				alloc.CPUs = alloc.CPUs.Union(cs)
 				n.ReservedCPUs = n.ReservedCPUs.Union(cs)
 				n.FreeCPUs = n.FreeCPUs.Difference(cs)
 				m.defaultCPUSetChanged = true
@@ -303,11 +303,11 @@ func (m *Manager) Admit(attrs *lifecycle.PodAdmitAttributes) lifecycle.PodAdmitR
 			}
 			if n.FreeBytes >= memBytesPerCPUGiver {
 				reqLocalMemBytes -= memBytesPerCPUGiver
-				alloc.perNUMANodeMemBytes[nID] += memBytesPerCPUGiver
+				alloc.PerNUMANodeMemBytes[nID] += memBytesPerCPUGiver
 				n.FreeBytes -= memBytesPerCPUGiver
 			} else {
 				reqLocalMemBytes -= n.FreeBytes
-				alloc.perNUMANodeMemBytes[nID] += n.FreeBytes
+				alloc.PerNUMANodeMemBytes[nID] += n.FreeBytes
 				n.FreeBytes = 0
 			}
 		}
@@ -316,12 +316,12 @@ func (m *Manager) Admit(attrs *lifecycle.PodAdmitAttributes) lifecycle.PodAdmitR
 				n := m.topo.NNUMANodes[nID]
 				if n.FreeBytes >= reqLocalMemBytes {
 					n.FreeBytes -= reqLocalMemBytes
-					alloc.perNUMANodeMemBytes[nID] += reqLocalMemBytes
+					alloc.PerNUMANodeMemBytes[nID] += reqLocalMemBytes
 					reqLocalMemBytes = 0
 					break
 				}
 				reqLocalMemBytes -= n.FreeBytes
-				alloc.perNUMANodeMemBytes[nID] += n.FreeBytes
+				alloc.PerNUMANodeMemBytes[nID] += n.FreeBytes
 				n.FreeBytes = 0
 			}
 		}
@@ -330,12 +330,12 @@ func (m *Manager) Admit(attrs *lifecycle.PodAdmitAttributes) lifecycle.PodAdmitR
 				n := m.topo.NNUMANodes[nID]
 				if n.FreeBytes >= reqLocalMemBytes {
 					n.FreeBytes -= reqLocalMemBytes
-					alloc.perNUMANodeMemBytes[nID] += reqLocalMemBytes
+					alloc.PerNUMANodeMemBytes[nID] += reqLocalMemBytes
 					reqLocalMemBytes = 0
 					break
 				}
 				reqLocalMemBytes -= n.FreeBytes
-				alloc.perNUMANodeMemBytes[nID] += n.FreeBytes
+				alloc.PerNUMANodeMemBytes[nID] += n.FreeBytes
 				n.FreeBytes = 0
 			}
 		}
@@ -345,17 +345,17 @@ func (m *Manager) Admit(attrs *lifecycle.PodAdmitAttributes) lifecycle.PodAdmitR
 			n := m.topo.ZNUMANodes[nID]
 			if n.FreeBytes >= reqFarMemBytes {
 				n.FreeBytes -= reqFarMemBytes
-				alloc.perNUMANodeMemBytes[nID] += reqFarMemBytes
+				alloc.PerNUMANodeMemBytes[nID] += reqFarMemBytes
 				reqFarMemBytes = 0
 				break
 			}
 			reqFarMemBytes -= n.FreeBytes
-			alloc.perNUMANodeMemBytes[nID] += n.FreeBytes
+			alloc.PerNUMANodeMemBytes[nID] += n.FreeBytes
 			n.FreeBytes = 0
 		}
 
 		if _, ok := m.allocs[string(p.UID)]; !ok {
-			m.allocs[string(p.UID)] = make(map[string]allocation, len(p.Spec.Containers))
+			m.allocs[string(p.UID)] = make(map[string]Allocation, len(p.Spec.Containers))
 		}
 		m.allocs[string(p.UID)][c.Name] = alloc
 	}
@@ -535,7 +535,7 @@ func (m *Manager) RemoveContainer(containerID string) error {
 		}
 
 		// Free memory.
-		for numaNodeID, usedMemBytesOnNode := range cntAlloc.perNUMANodeMemBytes {
+		for numaNodeID, usedMemBytesOnNode := range cntAlloc.PerNUMANodeMemBytes {
 			numaNode, ok := m.topo.numaNodeMem(numaNodeID)
 			if !ok {
 				klog.InfoS("deleting container with allocation on non-existing NUMA node",
@@ -555,7 +555,7 @@ func (m *Manager) RemoveContainer(containerID string) error {
 		// Free CPUs.
 		m.defaultCPUSetChanged = true
 		for _, n := range m.topo.NNUMANodes {
-			cpusToFree := n.ReservedCPUs.Intersection(cntAlloc.cpus)
+			cpusToFree := n.ReservedCPUs.Intersection(cntAlloc.CPUs)
 			n.ReservedCPUs = n.ReservedCPUs.Difference(cpusToFree)
 			n.FreeCPUs = n.FreeCPUs.Union(cpusToFree)
 		}
@@ -578,7 +578,7 @@ func (m *Manager) GetCPUAffinity(podUID string, containerName string) cpuset.CPU
 
 	if podAllocs, ok := m.allocs[podUID]; ok {
 		if cntAllocs, ok := podAllocs[containerName]; ok {
-			return cntAllocs.cpus.Clone()
+			return cntAllocs.CPUs.Clone()
 		}
 	}
 
@@ -595,7 +595,7 @@ func (m *Manager) GetExclusiveCPUs(podUID string, containerName string) cpuset.C
 
 	if podAllocs, ok := m.allocs[podUID]; ok {
 		if containerAllocs, ok := podAllocs[containerName]; ok {
-			return containerAllocs.cpus
+			return containerAllocs.CPUs
 		}
 	}
 	return cpuset.CPUSet{}
@@ -633,8 +633,8 @@ func (m *Manager) GetMemory(podUID string, containerName string) []state.Block {
 	if podAllocs, ok := m.allocs[podUID]; ok {
 		if cntAlloc, ok := podAllocs[containerName]; ok {
 			var totMemBytes uint64
-			numaNodes := make([]int, 0, len(cntAlloc.perNUMANodeMemBytes))
-			for n, memBytes := range cntAlloc.perNUMANodeMemBytes {
+			numaNodes := make([]int, 0, len(cntAlloc.PerNUMANodeMemBytes))
+			for n, memBytes := range cntAlloc.PerNUMANodeMemBytes {
 				totMemBytes += memBytes
 				numaNodes = append(numaNodes, n)
 			}
@@ -657,7 +657,7 @@ func (m *Manager) GetMemoryNUMANodes(pod *v1.Pod, container *v1.Container) sets.
 	nodes := sets.New[int]()
 	if podAllocs, ok := m.allocs[string(pod.UID)]; ok {
 		if cntAlloc, ok := podAllocs[container.Name]; ok {
-			for numaNode := range cntAlloc.perNUMANodeMemBytes {
+			for numaNode := range cntAlloc.PerNUMANodeMemBytes {
 				nodes.Insert(numaNode)
 			}
 		}
@@ -670,6 +670,15 @@ func (m *Manager) GetMemoryNUMANodes(pod *v1.Pod, container *v1.Container) sets.
 	}
 	klog.InfoS("Memory affinity", "pod", klog.KObj(pod), "containerName", container.Name, "numaNodes", nodes)
 	return nodes
+}
+
+func (m *Manager) GetAlloc(pod *v1.Pod, container *v1.Container) *Allocation {
+	if podAllocs, ok := m.allocs[string(pod.UID)]; ok {
+		if alloc, ok := podAllocs[container.Name]; ok {
+			return &alloc
+		}
+	}
+	return nil
 }
 
 func (m *Manager) reconcileDefaultCPUSet() (success []reconciledContainer, failure []reconciledContainer) {

@@ -26,9 +26,39 @@ import (
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
 	runtimeapi "k8s.io/cri-api/pkg/apis/runtime/v1"
+	"k8s.io/kubernetes/pkg/kubelet/cm/farmemtopologymanager"
 )
 
 func (i *internalContainerLifecycleImpl) PreCreateContainer(pod *v1.Pod, container *v1.Container, containerConfig *runtimeapi.ContainerConfig) error {
+	if fmm, ok := i.topologyManager.(*farmemtopologymanager.Manager); ok {
+		preCreateContainerWUnifiedMgr(fmm, pod, container, containerConfig)
+	} else {
+		preCreateContainerWCPUandMemMgrs(i, pod, container, containerConfig)
+	}
+	return nil
+}
+
+func preCreateContainerWUnifiedMgr(fmm *farmemtopologymanager.Manager, pod *v1.Pod, container *v1.Container, containerConfig *runtimeapi.ContainerConfig) {
+	a := fmm.GetAlloc(pod, container)
+	if a == nil {
+		return
+	}
+
+	if !a.CPUs.IsEmpty() {
+		containerConfig.Linux.Resources.CpusetCpus = a.CPUs.String()
+	}
+
+	if len(a.PerNUMANodeMemBytes) == 0 {
+		return
+	}
+
+	containerConfig.Linux.Resources.MaxPerMemInBytes = make(map[uint64]uint64, len(a.PerNUMANodeMemBytes))
+	for node, maxMemBytes := range a.PerNUMANodeMemBytes {
+		containerConfig.Linux.Resources.MaxPerMemInBytes[uint64(node)] = maxMemBytes
+	}
+}
+
+func preCreateContainerWCPUandMemMgrs(i *internalContainerLifecycleImpl, pod *v1.Pod, container *v1.Container, containerConfig *runtimeapi.ContainerConfig) error {
 	if i.cpuManager != nil {
 		allocatedCPUs := i.cpuManager.GetCPUAffinity(string(pod.UID), container.Name)
 		if !allocatedCPUs.IsEmpty() {
