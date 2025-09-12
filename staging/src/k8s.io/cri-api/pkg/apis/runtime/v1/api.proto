@@ -877,6 +877,9 @@ message LinuxContainerResources {
     map<string, string> unified = 9;
     // Memory swap limit in bytes. Default 0 (not specified).
     int64 memory_swap_limit_in_bytes = 10;
+
+    // Optional maximum amount of memory per NUMA node, for each NUMA node in cpuset_mems. Default nil (not specified).
+    map<uint64, uint64> max_per_mem_in_bytes = 11;
 }
 
 // HugepageLimit corresponds to the file`hugetlb.<hugepagesize>.limit_in_byte` in container level cgroup.
