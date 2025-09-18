@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"strconv"
 	"sync"
 	"time"
 
@@ -159,11 +160,16 @@ func (m *Manager) Admit(attrs *lifecycle.PodAdmitAttributes) lifecycle.PodAdmitR
 			return lifecycle.PodAdmitResult{Message: err.Error(), Reason: "FarMemParsing"}
 		}
 
+		minNNUMAs, maxNNUMAs, err := m.getRequestedNumNNUMAs(p, &c)
+		if err != nil {
+			return lifecycle.PodAdmitResult{Message: err.Error(), Reason: "InvalidNumNNUMAsAnnotations"}
+		}
+
 		// For now, we do a first fit.
 		// TODO: do something more effective than first fit.
 		var nNUMAsCombo []int
 		var zNUMAsCombo []int
-		for i := 1; i <= len(m.topo.NNUMANodes); i++ {
+		for i := minNNUMAs; i <= maxNNUMAs; i++ {
 			iterateCombinations(m.topo.NNUMANodesIDs, i, func(nNUMAsGrp []int) LoopControl {
 				if !m.groupIsConnected(nNUMAsGrp) {
 					klog.InfoS("discarding nNUMAs group", "group", nNUMAsGrp, "reason", "disconnected")
@@ -462,6 +468,55 @@ func getRequestedFarMemBytes(pod *v1.Pod, container *v1.Container) (uint64, erro
 
 func farMemAnnotationKey(containerName string) string {
 	return containerName + "/far-mem"
+}
+
+func (m *Manager) getRequestedNumNNUMAs(pod *v1.Pod, container *v1.Container) (min, max int, err error) {
+	// Get the user requested minimum, if specified.
+	min = 1
+	minKey := minNNUMAsAnnotationKey(container.Name)
+	minStr, ok := pod.Annotations[minKey]
+	if ok {
+		min, err = strconv.Atoi(minStr)
+		if err != nil {
+			err = fmt.Errorf("failed to parse annotation \"%s: %s\" with minimum number of nNUMA "+
+				"nodes: %v", minKey, minStr, err)
+			return
+		}
+		if min <= 0 {
+			err = fmt.Errorf("illegal value for min number of nNNUMA nodes in annotation %s: "+
+				"found value %d; must be > 0", minKey, min)
+			return
+		}
+	}
+
+	// Get the user requested maximum, if specified.
+	max = len(m.topo.NNUMANodesIDs)
+	maxKey := maxNNUMAsAnnotationKey(container.Name)
+	maxStr, ok := pod.Annotations[maxKey]
+	if ok {
+		max, err = strconv.Atoi(maxStr)
+		if err != nil {
+			err = fmt.Errorf("failed to parse annotation \"%s: %s\" with max number of nNUMA "+
+				"nodes: %v", maxKey, maxStr, err)
+			return
+		}
+		// No need to check max <= 0, the check on max >= min will catch that.
+	}
+
+	if max < min {
+		err = fmt.Errorf("illegal values of min and max number of NUMA nodes: max value %d is "+
+			"less than min value %d; max must be >= min", max, min)
+	}
+
+	return
+}
+
+func minNNUMAsAnnotationKey(containerName string) string {
+	return containerName + "/min-nnumas"
+}
+
+func maxNNUMAsAnnotationKey(containerName string) string {
+	return containerName + "/max-nnumas"
 }
 
 func getRequestedLocalMemBytes(container *v1.Container) (uint64, error) {
