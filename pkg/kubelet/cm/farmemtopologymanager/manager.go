@@ -48,6 +48,12 @@ type runtimeService interface {
 	UpdateContainerResources(ctx context.Context, id string, resources *runtimeapi.ContainerResources) error
 }
 
+type resourceRequest struct {
+	localMem, farMem     uint64
+	cpus                 int
+	minNNUMAs, maxNNUMAs int
+}
+
 type Manager struct {
 	// Mapping of (PodUID, ContainerName) to ContainerID for Adding/Removing Pods from PodTopologyHints mapping
 	podMap containermap.ContainerMap
@@ -147,29 +153,16 @@ func (m *Manager) Admit(attrs *lifecycle.PodAdmitAttributes) lifecycle.PodAdmitR
 	defer m.mutex.Unlock()
 
 	for _, c := range p.Spec.Containers {
-		// TODO: handle the case where the CPU request is 0 (is it even possible for Guaranteed pods?)
-		reqCPUs := getRequestedCPUs(p, &c)
-
-		reqLocalMemBytes, err := getRequestedLocalMemBytes(&c)
+		req, err := m.parseContainerReqs(p, &c)
 		if err != nil {
-			return lifecycle.PodAdmitResult{Message: err.Error(), Reason: "LocalMemParsing"}
-		}
-
-		reqFarMemBytes, err := getRequestedFarMemBytes(p, &c)
-		if err != nil {
-			return lifecycle.PodAdmitResult{Message: err.Error(), Reason: "FarMemParsing"}
-		}
-
-		minNNUMAs, maxNNUMAs, err := m.getRequestedNumNNUMAs(p, &c)
-		if err != nil {
-			return lifecycle.PodAdmitResult{Message: err.Error(), Reason: "InvalidNumNNUMAsAnnotations"}
+			return lifecycle.PodAdmitResult{Message: err.Error(), Reason: "InvalidResourceRequests"}
 		}
 
 		// For now, we do a first fit.
 		// TODO: do something more effective than first fit.
 		var nNUMAsCombo []int
 		var zNUMAsCombo []int
-		for i := minNNUMAs; i <= maxNNUMAs; i++ {
+		for i := req.minNNUMAs; i <= req.maxNNUMAs; i++ {
 			iterateCombinations(m.topo.NNUMANodesIDs, i, func(nNUMAsGrp []int) LoopControl {
 				if !m.groupIsConnected(nNUMAsGrp) {
 					klog.InfoS("discarding nNUMAs group", "group", nNUMAsGrp, "reason", "disconnected")
@@ -183,21 +176,21 @@ func (m *Manager) Admit(attrs *lifecycle.PodAdmitAttributes) lifecycle.PodAdmitR
 					freeMemBytes += m.topo.NNUMANodes[nID].FreeBytes
 				}
 
-				if freeCPUs < reqCPUs {
+				if freeCPUs < req.cpus {
 					klog.InfoS("discarding nNUMAs group: not enough free CPUs",
 						"group", nNUMAsGrp,
-						"num missing CPUs", reqCPUs-freeCPUs)
+						"num missing CPUs", req.cpus-freeCPUs)
 					return Continue
 				}
 
-				if freeMemBytes < reqLocalMemBytes {
+				if freeMemBytes < req.localMem {
 					klog.InfoS("discarding nNUMAs group: not enough free memory",
 						"group", nNUMAsGrp,
-						"missing free bytes", reqLocalMemBytes-freeMemBytes)
+						"missing free bytes", req.localMem-freeMemBytes)
 					return Continue
 				}
 
-				if reqFarMemBytes == 0 {
+				if req.farMem == 0 {
 					nNUMAsCombo = nNUMAsGrp
 					return Break
 				}
@@ -226,7 +219,7 @@ func (m *Manager) Admit(attrs *lifecycle.PodAdmitAttributes) lifecycle.PodAdmitR
 						for _, znID := range zNUMAsGrp {
 							freeFarMemBytes += m.topo.ZNUMANodes[znID].FreeBytes
 						}
-						if freeFarMemBytes >= reqFarMemBytes {
+						if freeFarMemBytes >= req.farMem {
 							nNUMAsCombo = nNUMAsGrp
 							zNUMAsCombo = zNUMAsGrp
 							return Break
@@ -242,7 +235,7 @@ func (m *Manager) Admit(attrs *lifecycle.PodAdmitAttributes) lifecycle.PodAdmitR
 				}
 
 				klog.InfoS("discarding nNUMAs group, not enough far memory in the zNUMAs connected to the combo",
-					"nNUMAs", nNUMAsGrp, "far mem request bytes", reqFarMemBytes)
+					"nNUMAs", nNUMAsGrp, "far mem request bytes", req.farMem)
 				return Continue
 			})
 
@@ -272,14 +265,14 @@ func (m *Manager) Admit(attrs *lifecycle.PodAdmitAttributes) lifecycle.PodAdmitR
 		cpuGivers := make(map[int]struct{}, len(nNUMAsCombo))
 		for _, nID := range nNUMAsCombo {
 			n := m.topo.NNUMANodes[nID]
-			if alloc.CPUs.Size() < reqCPUs && !n.FreeCPUs.IsEmpty() {
+			if alloc.CPUs.Size() < req.cpus && !n.FreeCPUs.IsEmpty() {
 				cpuGivers[nID] = struct{}{}
 				var cs cpuset.CPUSet
-				if alloc.CPUs.Size()+n.FreeCPUs.Size() > reqCPUs {
-					cpus := make([]int, 0, reqCPUs-alloc.CPUs.Size())
+				if alloc.CPUs.Size()+n.FreeCPUs.Size() > req.cpus {
+					cpus := make([]int, 0, req.cpus-alloc.CPUs.Size())
 					for _, cpu := range n.FreeCPUs.List() {
 						cpus = append(cpus, cpu)
-						if len(cpus)+alloc.CPUs.Size() == reqCPUs {
+						if len(cpus)+alloc.CPUs.Size() == req.cpus {
 							break
 						}
 					}
@@ -295,46 +288,46 @@ func (m *Manager) Admit(attrs *lifecycle.PodAdmitAttributes) lifecycle.PodAdmitR
 		}
 
 		// Allocate local memory.
-		memBytesPerCPUGiver := reqLocalMemBytes / uint64(len(cpuGivers))
+		memBytesPerCPUGiver := req.localMem / uint64(len(cpuGivers))
 		for nID := range cpuGivers {
 			n := m.topo.NNUMANodes[nID]
 			if n.FreeBytes == 0 {
 				continue
 			}
 			if n.FreeBytes >= memBytesPerCPUGiver {
-				reqLocalMemBytes -= memBytesPerCPUGiver
+				req.localMem -= memBytesPerCPUGiver
 				alloc.PerNUMANodeMemBytes[nID] += memBytesPerCPUGiver
 				n.FreeBytes -= memBytesPerCPUGiver
 			} else {
-				reqLocalMemBytes -= n.FreeBytes
+				req.localMem -= n.FreeBytes
 				alloc.PerNUMANodeMemBytes[nID] += n.FreeBytes
 				n.FreeBytes = 0
 			}
 		}
-		if reqLocalMemBytes > 0 {
+		if req.localMem > 0 {
 			for nID := range cpuGivers {
 				n := m.topo.NNUMANodes[nID]
-				if n.FreeBytes >= reqLocalMemBytes {
-					n.FreeBytes -= reqLocalMemBytes
-					alloc.PerNUMANodeMemBytes[nID] += reqLocalMemBytes
-					reqLocalMemBytes = 0
+				if n.FreeBytes >= req.localMem {
+					n.FreeBytes -= req.localMem
+					alloc.PerNUMANodeMemBytes[nID] += req.localMem
+					req.localMem = 0
 					break
 				}
-				reqLocalMemBytes -= n.FreeBytes
+				req.localMem -= n.FreeBytes
 				alloc.PerNUMANodeMemBytes[nID] += n.FreeBytes
 				n.FreeBytes = 0
 			}
 		}
-		if reqLocalMemBytes > 0 {
+		if req.localMem > 0 {
 			for _, nID := range nNUMAsCombo {
 				n := m.topo.NNUMANodes[nID]
-				if n.FreeBytes >= reqLocalMemBytes {
-					n.FreeBytes -= reqLocalMemBytes
-					alloc.PerNUMANodeMemBytes[nID] += reqLocalMemBytes
-					reqLocalMemBytes = 0
+				if n.FreeBytes >= req.localMem {
+					n.FreeBytes -= req.localMem
+					alloc.PerNUMANodeMemBytes[nID] += req.localMem
+					req.localMem = 0
 					break
 				}
-				reqLocalMemBytes -= n.FreeBytes
+				req.localMem -= n.FreeBytes
 				alloc.PerNUMANodeMemBytes[nID] += n.FreeBytes
 				n.FreeBytes = 0
 			}
@@ -343,13 +336,13 @@ func (m *Manager) Admit(attrs *lifecycle.PodAdmitAttributes) lifecycle.PodAdmitR
 		// Allocate far memory.
 		for _, nID := range zNUMAsCombo {
 			n := m.topo.ZNUMANodes[nID]
-			if n.FreeBytes >= reqFarMemBytes {
-				n.FreeBytes -= reqFarMemBytes
-				alloc.PerNUMANodeMemBytes[nID] += reqFarMemBytes
-				reqFarMemBytes = 0
+			if n.FreeBytes >= req.farMem {
+				n.FreeBytes -= req.farMem
+				alloc.PerNUMANodeMemBytes[nID] += req.farMem
+				req.farMem = 0
 				break
 			}
-			reqFarMemBytes -= n.FreeBytes
+			req.farMem -= n.FreeBytes
 			alloc.PerNUMANodeMemBytes[nID] += n.FreeBytes
 			n.FreeBytes = 0
 		}
@@ -440,6 +433,31 @@ func (m *Manager) groupIsConnected(nNUMAsList []int) bool {
 	}
 
 	return true
+}
+
+func (m *Manager) parseContainerReqs(p *v1.Pod, c *v1.Container) (resourceRequest, error) {
+	var rr resourceRequest
+	var err error
+
+	rr.localMem, err = getRequestedLocalMemBytes(c)
+	if err != nil {
+		return rr, fmt.Errorf("failed to parse local memory: %v", err)
+	}
+
+	rr.farMem, err = getRequestedFarMemBytes(p, c)
+	if err != nil {
+		return rr, fmt.Errorf("failed to parse far memory: %v", err)
+	}
+
+	// TODO: handle the case where the CPU request is 0 (is it even possible for Guaranteed pods?)
+	rr.cpus = getRequestedCPUs(p, c)
+
+	rr.minNNUMAs, rr.maxNNUMAs, err = m.getRequestedNumNNUMAs(p, c)
+	if err != nil {
+		return rr, fmt.Errorf("failed to parse number of nNUMA nodes: %v", err)
+	}
+
+	return rr, nil
 }
 
 // If getRequestedFarMemBytes returns an error, it also returns a 0 quantity, because the caller is a
