@@ -175,9 +175,6 @@ func initTopology(machineInfo *cadvisor.MachineInfo) *topology {
 		}
 	}
 
-	// Sort NUMA Node IDs For predictability/debuggability.
-	slices.Sort(t.NNUMANodesIDs)
-
 	// Now initialize the neighboring relationships between nodes.
 	// First, initialize those between n and z NUMAs.
 	// To do that, use Linux sysfs files described here: https://docs.kernel.org/admin-guide/mm/numaperf.html.
@@ -280,6 +277,26 @@ func initTopology(machineInfo *cadvisor.MachineInfo) *topology {
 			}
 		}
 	}
+
+	farMemBytesInNeighbors := func(id int) int {
+		nNUMA := t.NNUMANodes[id]
+
+		farMemBytes := uint64(0)
+		for neighborZNUMA := range nNUMA.NeighborZNUMAs {
+			farMemBytes += t.ZNUMANodes[neighborZNUMA].Mem.AllocatableBytes
+		}
+
+		if farMemBytes > uint64(math.MaxInt) {
+			panic(fmt.Errorf("amount of far memory neighboring nNUMA %d overflows", id))
+		}
+
+		return int(farMemBytes)
+	}
+
+	// First, I want the NUMAs with less far memory close to them.
+	slices.SortFunc(t.NNUMANodesIDs, func(n1, n2 int) int {
+		return farMemBytesInNeighbors(n1) - farMemBytesInNeighbors(n2)
+	})
 
 	return t
 }
