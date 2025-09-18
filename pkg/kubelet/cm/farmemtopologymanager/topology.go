@@ -14,11 +14,6 @@ import (
 	cadvisor "github.com/google/cadvisor/info/v1"
 )
 
-// TODO: consider just using hwloc (and its hardware model, which is different, and probably better,
-// than ours). So far I haven't done so under the (perhaps incorrect) assumption that it'd have been
-// faster to implement this code by myself without having to figure out how to integrate hwloc
-// (written in C) with this Go code.
-
 // Throughout this file, SNC stands for "sub-NUMA clustering". When we talk about SNC, we also mean
 // systems where a single socket holds multiple physical NUMA nodes (do they exist?), besides
 // real SNC systems.
