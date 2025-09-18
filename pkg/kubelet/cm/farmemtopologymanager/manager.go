@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"sort"
 	"sync"
 	"time"
 
@@ -164,7 +165,7 @@ func (m *Manager) Admit(attrs *lifecycle.PodAdmitAttributes) lifecycle.PodAdmitR
 		for n := range m.topo.NNUMANodes {
 			allNNUMAs = append(allNNUMAs, n)
 		}
-		slices.Sort(allNNUMAs)
+		sort.Slice(allNNUMAs, func(x, y int) bool { return x > y })
 
 		// For now, we do a first fit.
 		// TODO: do something more effective than first fit.
