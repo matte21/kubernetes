@@ -159,6 +159,7 @@ func (m *Manager) Admit(attrs *lifecycle.PodAdmitAttributes) lifecycle.PodAdmitR
 			return lifecycle.PodAdmitResult{Message: err.Error(), Reason: "FarMemParsing"}
 		}
 
+		// TODO: cache list, since we always use it.
 		allNNUMAs := make([]int, 0, len(m.topo.NNUMANodes))
 		for n := range m.topo.NNUMANodes {
 			allNNUMAs = append(allNNUMAs, n)
