@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -31,6 +32,10 @@ type topology struct {
 	SocketToNNUMANodesIDs map[int]map[int]struct{}
 
 	NNUMANodes map[int]*nNUMANode
+
+	// Sometimes it's convenient to have just the IDs as a list, so we duplicate that information for convenience.
+	// The overhead is probably minimum (but we'll measure this).
+	NNUMANodesIDs []int
 
 	// We consider zNUMAs as external to sockets (even though in practice they might be considered
 	// as belonging to one, maybe more, sockets, since they'll be connected to the host via a CXL
@@ -108,6 +113,7 @@ func initTopology(machineInfo *cadvisor.MachineInfo) *topology {
 	t := &topology{
 		SocketToNNUMANodesIDs: make(map[int]map[int]struct{}),
 		NNUMANodes:            make(map[int]*nNUMANode),
+		NNUMANodesIDs:         make([]int, 0, len(machineInfo.Topology)),
 		ZNUMANodes:            make(map[int]*zNUMANode),
 		AllCPUs:               cpuset.New(),
 		SystemReservedCPUs:    cpuset.New(),
@@ -165,6 +171,7 @@ func initTopology(machineInfo *cadvisor.MachineInfo) *topology {
 				NeighborZNUMAs:         make(map[int]struct{}, 0),
 				NeighborNNUMAsBySocket: make(map[int]map[int]struct{}),
 			}
+			t.NNUMANodesIDs = append(t.NNUMANodesIDs, numaNode.Id)
 
 			if _, ok := t.SocketToNNUMANodesIDs[sockID]; !ok {
 				t.SocketToNNUMANodesIDs[sockID] = make(map[int]struct{}, 1)
@@ -172,6 +179,9 @@ func initTopology(machineInfo *cadvisor.MachineInfo) *topology {
 			t.SocketToNNUMANodesIDs[sockID][numaNode.Id] = struct{}{}
 		}
 	}
+
+	// Sort NUMA Node IDs For predictability/debuggability.
+	slices.Sort(t.NNUMANodesIDs)
 
 	// Now initialize the neighboring relationships between nodes.
 	// First, initialize those between n and z NUMAs.

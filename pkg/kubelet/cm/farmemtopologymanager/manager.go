@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"math"
 	"slices"
-	"sort"
 	"sync"
 	"time"
 
@@ -160,19 +159,12 @@ func (m *Manager) Admit(attrs *lifecycle.PodAdmitAttributes) lifecycle.PodAdmitR
 			return lifecycle.PodAdmitResult{Message: err.Error(), Reason: "FarMemParsing"}
 		}
 
-		// TODO: cache list, since we always use it.
-		allNNUMAs := make([]int, 0, len(m.topo.NNUMANodes))
-		for n := range m.topo.NNUMANodes {
-			allNNUMAs = append(allNNUMAs, n)
-		}
-		sort.Slice(allNNUMAs, func(x, y int) bool { return x > y })
-
 		// For now, we do a first fit.
 		// TODO: do something more effective than first fit.
 		var nNUMAsCombo []int
 		var zNUMAsCombo []int
 		for i := 1; i <= len(m.topo.NNUMANodes); i++ {
-			iterateCombinations(allNNUMAs, i, func(nNUMAsGrp []int) LoopControl {
+			iterateCombinations(m.topo.NNUMANodesIDs, i, func(nNUMAsGrp []int) LoopControl {
 				if !m.groupIsConnected(nNUMAsGrp) {
 					klog.InfoS("discarding nNUMAs group", "group", nNUMAsGrp, "reason", "disconnected")
 					return Continue
