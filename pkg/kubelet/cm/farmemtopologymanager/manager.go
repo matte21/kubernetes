@@ -508,7 +508,7 @@ func (m *Manager) getRequestedNumNNUMAs(pod *v1.Pod, container *v1.Container) (m
 	}
 
 	// Get the user requested maximum, if specified.
-	max = len(m.topo.NNUMANodesIDs)
+	max = len(m.topo.NNUMANodes)
 	maxKey := maxNNUMAsAnnotationKey(container.Name)
 	maxStr, ok := pod.Annotations[maxKey]
 	if ok {
