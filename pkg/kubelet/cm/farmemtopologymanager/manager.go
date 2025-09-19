@@ -576,13 +576,14 @@ func (m *Manager) RemoveContainer(containerID string) error {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 
-	klog.InfoS("RemoveContainer", "containerID", containerID)
 	// Get the podUID and containerName associated with the containerID to be removed and remove it
 	podUIDString, containerName, err := m.podMap.GetContainerRef(containerID)
 	if err != nil {
 		return nil
 	}
 	m.podMap.RemoveByContainerID(containerID)
+
+	klog.InfoS("RemoveContainer", "containerID", containerID, "podUID", podUIDString, "containerName", containerName)
 
 	// Now, remove the allocation.
 
