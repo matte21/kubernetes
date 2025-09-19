@@ -163,7 +163,7 @@ func (m *Manager) Admit(attrs *lifecycle.PodAdmitAttributes) lifecycle.PodAdmitR
 		var nNUMAsCombo []int
 		var zNUMAsCombo []int
 		for i := req.minNNUMAs; i <= req.maxNNUMAs; i++ {
-			iterateCombinations(m.topo.NNUMANodesIDs, i, func(nNUMAsGrp []int) LoopControl {
+			iterateCombinations(m.topo.NNUMAsSortedByNeighborFarMemory, i, func(nNUMAsGrp []int) LoopControl {
 				if !m.groupIsConnected(nNUMAsGrp) {
 					klog.InfoS("discarding nNUMAs group", "group", nNUMAsGrp, "reason", "disconnected")
 					return Continue

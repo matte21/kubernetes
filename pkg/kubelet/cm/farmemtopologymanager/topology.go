@@ -28,10 +28,6 @@ type topology struct {
 
 	NNUMANodes map[int]*nNUMANode
 
-	// Sometimes it's convenient to have just the IDs as a list, so we duplicate that information for convenience.
-	// The overhead is probably minimum (but we'll measure this).
-	NNUMANodesIDs []int
-
 	// We consider zNUMAs as external to sockets (even though in practice they might be considered
 	// as belonging to one, maybe more, sockets, since they'll be connected to the host via a CXL
 	// port that will be on a CPU socket).
@@ -50,6 +46,12 @@ type topology struct {
 	// kubelet or other critical infrastructure components. Pods in BestEffort and Burstable QoS
 	// classes can still run on them though.
 	SystemReservedCPUs cpuset.CPUSet
+
+	// When doing first fit, we want to allocate to containers that don't request far memory
+	// starting from the nNUMAs that have least far memory neighboring them. So we keep a list
+	// of nNUMAs IDs sorted in ascending order of far memory in neighboring zNUMAs.
+	// TODO: consider making this a min heap.
+	NNUMAsSortedByNeighborFarMemory []int
 }
 
 func (t *topology) numaNodeMem(id int) (*Mem, bool) {
@@ -106,12 +108,12 @@ type Mem struct {
 // per socket).
 func initTopology(machineInfo *cadvisor.MachineInfo) *topology {
 	t := &topology{
-		SocketToNNUMANodesIDs: make(map[int]map[int]struct{}),
-		NNUMANodes:            make(map[int]*nNUMANode),
-		NNUMANodesIDs:         make([]int, 0, len(machineInfo.Topology)),
-		ZNUMANodes:            make(map[int]*zNUMANode),
-		AllCPUs:               cpuset.New(),
-		SystemReservedCPUs:    cpuset.New(),
+		SocketToNNUMANodesIDs:           make(map[int]map[int]struct{}),
+		NNUMANodes:                      make(map[int]*nNUMANode),
+		NNUMAsSortedByNeighborFarMemory: make([]int, 0, len(machineInfo.Topology)),
+		ZNUMANodes:                      make(map[int]*zNUMANode),
+		AllCPUs:                         cpuset.New(),
+		SystemReservedCPUs:              cpuset.New(),
 	}
 
 	// This holds the ACPI SLIT table.
@@ -166,7 +168,7 @@ func initTopology(machineInfo *cadvisor.MachineInfo) *topology {
 				NeighborZNUMAs:         make(map[int]struct{}, 0),
 				NeighborNNUMAsBySocket: make(map[int]map[int]struct{}),
 			}
-			t.NNUMANodesIDs = append(t.NNUMANodesIDs, numaNode.Id)
+			t.NNUMAsSortedByNeighborFarMemory = append(t.NNUMAsSortedByNeighborFarMemory, numaNode.Id)
 
 			if _, ok := t.SocketToNNUMANodesIDs[sockID]; !ok {
 				t.SocketToNNUMANodesIDs[sockID] = make(map[int]struct{}, 1)
@@ -293,8 +295,8 @@ func initTopology(machineInfo *cadvisor.MachineInfo) *topology {
 		return int(farMemBytes)
 	}
 
-	// First, I want the NUMAs with less far memory close to them.
-	slices.SortFunc(t.NNUMANodesIDs, func(n1, n2 int) int {
+	// Sort nNUMAs in ascending order of far memory in neighboring zNUMAs.
+	slices.SortFunc(t.NNUMAsSortedByNeighborFarMemory, func(n1, n2 int) int {
 		return farMemBytesInNeighbors(n1) - farMemBytesInNeighbors(n2)
 	})
 
