@@ -1,6 +1,7 @@
 package farmemtopologymanager
 
 import (
+	"container/heap"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -158,6 +159,15 @@ func (m *Manager) Admit(attrs *lifecycle.PodAdmitAttributes) lifecycle.PodAdmitR
 			return lifecycle.PodAdmitResult{Message: err.Error(), Reason: "InvalidResourceRequests"}
 		}
 
+		minNumNNUMAs := m.minNumNNUMAsGivenFreeResources(req.cpus, req.localMem)
+		if minNumNNUMAs > req.maxNNUMAs {
+			return lifecycle.PodAdmitResult{Reason: "NeedMoreNUMANodesThanMaxRequested"}
+		}
+
+		if minNumNNUMAs > req.minNNUMAs {
+			req.minNNUMAs = minNumNNUMAs
+		}
+
 		// For now, we do a first fit.
 		// TODO: do something more effective than first fit.
 		var nNUMAsCombo []int
@@ -286,6 +296,7 @@ func (m *Manager) Admit(attrs *lifecycle.PodAdmitAttributes) lifecycle.PodAdmitR
 				m.defaultCPUSetChanged = true
 			}
 		}
+		heap.Init(m.topo.nNUMAsByFreeCPUs)
 
 		// Allocate local memory.
 		memBytesPerCPUGiver := req.localMem / uint64(len(cpuGivers))
@@ -332,6 +343,7 @@ func (m *Manager) Admit(attrs *lifecycle.PodAdmitAttributes) lifecycle.PodAdmitR
 				n.FreeBytes = 0
 			}
 		}
+		heap.Init(m.topo.nNUMAsByFreeMem)
 
 		// Allocate far memory.
 		for _, nID := range zNUMAsCombo {
@@ -358,7 +370,18 @@ func (m *Manager) Admit(attrs *lifecycle.PodAdmitAttributes) lifecycle.PodAdmitR
 	}
 }
 
-// TODO: min size optimization.
+func (m *Manager) minNumNNUMAsGivenFreeResources(reqCPUs int, reqMem uint64) int {
+	maxFreeCPUs := m.topo.maxFreeCPUsInSingleNNUMA()
+	minCPUWise := (reqCPUs + maxFreeCPUs - 1) / maxFreeCPUs
+
+	maxFreeMem := m.topo.maxFreeMemInSingleNNUMA()
+	minMemWise := (reqMem + maxFreeMem - 1) / maxFreeMem
+
+	if minMemWise > uint64(minCPUWise) {
+		return int(minMemWise)
+	}
+	return minCPUWise
+}
 
 // LoopControl controls the behavior of the cpu accumulator loop logic
 type LoopControl int

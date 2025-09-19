@@ -1,6 +1,7 @@
 package farmemtopologymanager
 
 import (
+	"container/heap"
 	"fmt"
 	"math"
 	"os"
@@ -52,6 +53,13 @@ type topology struct {
 	// of nNUMAs IDs sorted in ascending order of far memory in neighboring zNUMAs.
 	// TODO: consider making this a min heap.
 	NNUMAsSortedByNeighborFarMemory []int
+
+	// To speed up the search, we maintain max heaps of the nNUMA node IDs, where the sorting is done
+	// based on the amount of free CPUs and memory. By knowing the maximum amount of free
+	// memory/CPUs that a single nNUMA holds, we can determine the minimum number of nNUMA nodes
+	// needed to satisfy an allocation, and we can start searching form combos of NUMAs of that size.
+	nNUMAsByFreeCPUs *FreeResourcesMaxHeap
+	nNUMAsByFreeMem  *FreeResourcesMaxHeap
 }
 
 func (t *topology) numaNodeMem(id int) (*Mem, bool) {
@@ -300,5 +308,83 @@ func initTopology(machineInfo *cadvisor.MachineInfo) *topology {
 		return farMemBytesInNeighbors(n1) - farMemBytesInNeighbors(n2)
 	})
 
+	t.nNUMAsByFreeCPUs = newMaxHeap(t, true)
+	t.nNUMAsByFreeMem = newMaxHeap(t, false)
+
 	return t
+}
+
+func (t *topology) maxFreeCPUsInSingleNNUMA() int {
+	emptiestNNUMAID := t.nNUMAsByFreeCPUs.nNUMAs[0]
+	nN := t.NNUMANodes[emptiestNNUMAID]
+	return nN.FreeCPUs.Size()
+}
+
+func (t *topology) maxFreeMemInSingleNNUMA() uint64 {
+	emptiestNNUMAID := t.nNUMAsByFreeMem.nNUMAs[0]
+	nN := t.NNUMANodes[emptiestNNUMAID]
+	return nN.FreeBytes
+}
+
+func newMaxHeap(t *topology, isAboutCPUs bool) *FreeResourcesMaxHeap {
+	h := &FreeResourcesMaxHeap{
+		t:           t,
+		nNUMAs:      make([]int, len(t.NNUMAsSortedByNeighborFarMemory)),
+		isAboutCPUs: isAboutCPUs,
+	}
+
+	copy(h.nNUMAs, t.NNUMAsSortedByNeighborFarMemory)
+	heap.Init(h)
+
+	return h
+}
+
+type FreeResourcesMaxHeap struct {
+	t           *topology
+	nNUMAs      []int
+	isAboutCPUs bool
+}
+
+func (h *FreeResourcesMaxHeap) Len() int {
+	return len(h.nNUMAs)
+}
+
+func (h *FreeResourcesMaxHeap) Less(i, j int) bool {
+	n1ID := h.nNUMAs[i]
+	n2ID := h.nNUMAs[j]
+
+	n1, ok1 := h.t.NNUMANodes[n1ID]
+	if !ok1 {
+		panic(fmt.Errorf("free CPUs heap's Less() invoked with non-existent NUMA node ID %d", n1ID))
+	}
+
+	n2, ok2 := h.t.NNUMANodes[n2ID]
+	if !ok2 {
+		panic(fmt.Errorf("free CPUs heap's Less() invoked with non-existent NUMA node ID %d", n2ID))
+	}
+
+	// Note that n1 is "Less than" n2 if it has *more* free resources, because we need a max
+	// heap, but Go stdlib's container/heap functions implement a min heap. So we have to flip the
+	// meaning of Less().
+
+	if h.isAboutCPUs {
+		return n1.FreeCPUs.Size() > n2.FreeCPUs.Size()
+	}
+
+	return n1.FreeBytes > n2.FreeBytes
+}
+
+func (h *FreeResourcesMaxHeap) Swap(i, j int) {
+	h.nNUMAs[i], h.nNUMAs[j] = h.nNUMAs[j], h.nNUMAs[i]
+}
+
+// The population of nNUMAs is assumed to be fixed, so we don't need Push and Pop, but we implement
+// them to satisfy the "container/heap" interface of Go's stdlib.
+
+func (*FreeResourcesMaxHeap) Push(x any) {
+	panic("Push is unimplemented and you should never call it.")
+}
+
+func (*FreeResourcesMaxHeap) Pop() any {
+	panic("Pop is unimplemented and you should never call it.")
 }
