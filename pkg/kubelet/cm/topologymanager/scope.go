@@ -19,7 +19,7 @@ package topologymanager
 import (
 	"sync"
 
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	"k8s.io/klog/v2"
 	"k8s.io/kubernetes/pkg/kubelet/cm/admission"
 	"k8s.io/kubernetes/pkg/kubelet/cm/containermap"
@@ -114,13 +114,14 @@ func (s *scope) RemoveContainer(containerID string) error {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	klog.InfoS("RemoveContainer", "containerID", containerID)
 	// Get the podUID and containerName associated with the containerID to be removed and remove it
 	podUIDString, containerName, err := s.podMap.GetContainerRef(containerID)
 	if err != nil {
 		return nil
 	}
 	s.podMap.RemoveByContainerID(containerID)
+
+	klog.InfoS("RemoveContainer", "containerID", containerID, "podUID", podUIDString, "containerName", containerName)
 
 	// In cases where a container has been restarted, it's possible that the same podUID and
 	// containerName are already associated with a *different* containerID now. Only remove
