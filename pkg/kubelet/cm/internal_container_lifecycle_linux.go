@@ -52,10 +52,13 @@ func preCreateContainerWUnifiedMgr(fmm *farmemtopologymanager.Manager, pod *v1.P
 		return
 	}
 
+	var cpusetMems []string
 	containerConfig.Linux.Resources.MaxPerMemInBytes = make(map[uint64]uint64, len(a.PerNUMANodeMemBytes))
 	for node, maxMemBytes := range a.PerNUMANodeMemBytes {
 		containerConfig.Linux.Resources.MaxPerMemInBytes[uint64(node)] = maxMemBytes
+		cpusetMems = append(cpusetMems, strconv.Itoa(node))
 	}
+	containerConfig.Linux.Resources.CpusetMems = strings.Join(cpusetMems, ",")
 }
 
 func preCreateContainerWCPUandMemMgrs(i *internalContainerLifecycleImpl, pod *v1.Pod, container *v1.Container, containerConfig *runtimeapi.ContainerConfig) error {
