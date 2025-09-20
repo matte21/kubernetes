@@ -718,6 +718,9 @@ func (m *Manager) RemoveContainer(containerID string) error {
 		}
 	}
 
+	heap.Init(m.topo.nNUMAsByFreeMem)
+	heap.Init(m.topo.nNUMAsByFreeCPUs)
+
 	return nil
 }
 
