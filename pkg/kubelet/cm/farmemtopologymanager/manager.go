@@ -375,10 +375,10 @@ func (m *Manager) minNumNNUMAsGivenFreeResources(reqCPUs int, reqMem uint64) int
 	minCPUWise := (reqCPUs + maxFreeCPUs - 1) / maxFreeCPUs
 
 	maxFreeMem := m.topo.maxFreeMemInSingleNNUMA()
-	minMemWise := (reqMem + maxFreeMem - 1) / maxFreeMem
+	minMemWise := int((reqMem + maxFreeMem - 1) / maxFreeMem)
 
-	if minMemWise > uint64(minCPUWise) {
-		return int(minMemWise)
+	if minMemWise > minCPUWise {
+		return minMemWise
 	}
 	return minCPUWise
 }
