@@ -179,7 +179,7 @@ func (m *Manager) Admit(attrs *lifecycle.PodAdmitAttributes) lifecycle.PodAdmitR
 
 		minNumNNUMAs := m.minNumNNUMAsGivenFreeResources(req.cpus, req.localMem)
 		if minNumNNUMAs > req.maxNNUMAs {
-			return lifecycle.PodAdmitResult{Reason: "NeedMoreNUMANodesThanMaxRequested"}
+			return lifecycle.PodAdmitResult{Admit: false, Reason: "NeedMoreNUMANodesThanMaxRequested"}
 		}
 
 		if minNumNNUMAs > req.minNNUMAs {
