@@ -285,36 +285,12 @@ func (m *Manager) Admit(attrs *lifecycle.PodAdmitAttributes) lifecycle.PodAdmitR
 
 		// Now, do the allocation.
 		alloc := Allocation{
-			CPUs:                cpuset.New(),
 			PerNUMANodeMemBytes: make(map[int]uint64, len(zNUMAsCombo)+len(nNUMAsCombo)),
 		}
 
-		// Allocate CPUs.
-		cpuGivers := make(map[int]struct{}, len(nNUMAsCombo))
-		for _, nID := range nNUMAsCombo {
-			n := m.topo.NNUMANodes[nID]
-			if alloc.CPUs.Size() < req.cpus && !n.FreeCPUs.IsEmpty() {
-				cpuGivers[nID] = struct{}{}
-				var cs cpuset.CPUSet
-				if alloc.CPUs.Size()+n.FreeCPUs.Size() > req.cpus {
-					cpus := make([]int, 0, req.cpus-alloc.CPUs.Size())
-					for _, cpu := range n.FreeCPUs.List() {
-						cpus = append(cpus, cpu)
-						if len(cpus)+alloc.CPUs.Size() == req.cpus {
-							break
-						}
-					}
-					cs = cpuset.New(cpus...)
-				} else {
-					cs = n.FreeCPUs
-				}
-				alloc.CPUs = alloc.CPUs.Union(cs)
-				n.ReservedCPUs = n.ReservedCPUs.Union(cs)
-				n.FreeCPUs = n.FreeCPUs.Difference(cs)
-				m.defaultCPUSetChanged = true
-			}
-		}
-		heap.Init(m.topo.nNUMAsByFreeCPUs)
+		// Allocate CPUs from the selected nNUMAs combo.
+		allocatedCPUs, cpuGivers := m.allocateCPUs(nNUMAsCombo, req.cpus)
+		alloc.CPUs = allocatedCPUs
 
 		// Allocate local memory.
 		memBytesPerCPUGiver := req.localMem / uint64(len(cpuGivers))
@@ -386,6 +362,52 @@ func (m *Manager) Admit(attrs *lifecycle.PodAdmitAttributes) lifecycle.PodAdmitR
 	return lifecycle.PodAdmitResult{
 		Admit: true,
 	}
+}
+
+// nNUMAs is the set of nNUMA nodes to allocate `numToAlloc` CPUs from.
+func (m *Manager) allocateCPUs(nNUMAs []int, numToAlloc int) (cpuset.CPUSet, map[int]struct{}) {
+	allocatedCPUs := cpuset.New()
+
+	// Set of nNUMAs that actually contribute CPUs to the allocation.
+	cpuGivers := make(map[int]struct{}, len(nNUMAs))
+
+	for _, nID := range nNUMAs {
+		n := m.topo.NNUMANodes[nID]
+
+		if allocatedCPUs.Size() == numToAlloc || n.FreeCPUs.IsEmpty() {
+			break
+		}
+
+		// We still need CPUs, and n has some: we'll allocate from it.
+		cpuGivers[nID] = struct{}{}
+
+		var cs cpuset.CPUSet
+		if allocatedCPUs.Size()+n.FreeCPUs.Size() > numToAlloc {
+			// If we're here, n has more free CPUs than those needed to completely satisfy the
+			// allocation.
+			cpus := make([]int, 0, numToAlloc-allocatedCPUs.Size())
+			for _, fc := range n.FreeCPUs.List() {
+				cpus = append(cpus, fc)
+				if len(cpus)+allocatedCPUs.Size() == numToAlloc {
+					break
+				}
+			}
+			cs = cpuset.New(cpus...)
+		} else {
+			// If we're here, n has less or just enough free CPUs to completely satisfy the
+			// allocation.
+			cs = n.FreeCPUs
+		}
+
+		allocatedCPUs = allocatedCPUs.Union(cs)
+		n.ReservedCPUs = n.ReservedCPUs.Union(cs)
+		n.FreeCPUs = n.FreeCPUs.Difference(cs)
+		m.defaultCPUSetChanged = true
+	}
+
+	heap.Init(m.topo.nNUMAsByFreeCPUs)
+
+	return allocatedCPUs, cpuGivers
 }
 
 func (m *Manager) minNumNNUMAsGivenFreeResources(reqCPUs int, reqMem uint64) int {
