@@ -49,10 +49,28 @@ type runtimeService interface {
 	UpdateContainerResources(ctx context.Context, id string, resources *runtimeapi.ContainerResources) error
 }
 
+// Constants corresponding to the different ways to distribute CPUs across NUMA nodes and caches.
+const (
+	PackEagerly = "pack-eagerly"
+	NUMAEven    = "interleave"
+	LLCShare    = "llc-share"
+	L1Share     = "l1-share"
+	L1Spread    = "l1-spread"
+)
+
+var supportedCPUsDistributionPolicies map[string]struct{} = map[string]struct{}{
+	PackEagerly: {},
+	NUMAEven:    {},
+	LLCShare:    {},
+	L1Share:     {},
+	L1Spread:    {},
+}
+
 type resourceRequest struct {
-	localMem, farMem     uint64
-	cpus                 int
-	minNNUMAs, maxNNUMAs int
+	localMem, farMem       uint64
+	cpus                   int
+	minNNUMAs, maxNNUMAs   int
+	cpusDistributionPolicy string
 }
 
 type Manager struct {
@@ -475,12 +493,38 @@ func (m *Manager) parseContainerReqs(p *v1.Pod, c *v1.Container) (resourceReques
 	// TODO: handle the case where the CPU request is 0 (is it even possible for Guaranteed pods?)
 	rr.cpus = getRequestedCPUs(p, c)
 
+	rr.cpusDistributionPolicy, err = getRequestCPUsDistPolicy(p, c)
+	if err != nil {
+		return rr, fmt.Errorf("failed to parse CPUs distribution policy: %v", err)
+	}
+
 	rr.minNNUMAs, rr.maxNNUMAs, err = m.getRequestedNumNNUMAs(p, c)
 	if err != nil {
 		return rr, fmt.Errorf("failed to parse number of nNUMA nodes: %v", err)
 	}
 
 	return rr, nil
+}
+
+func getRequestCPUsDistPolicy(p *v1.Pod, c *v1.Container) (string, error) {
+	cpusDistPolicyAnnotationKey := cpusDistPolicyAnnotationKey(c.Name)
+
+	cpusDistPolicy, ok := p.Annotations[cpusDistPolicyAnnotationKey]
+	if !ok {
+		// PackEagerly is the default, same as the baseline kubelet.
+		return PackEagerly, nil
+	}
+
+	if _, ok := supportedCPUsDistributionPolicies[cpusDistPolicy]; !ok {
+		return "", fmt.Errorf("requested CPUs distribution policy %s is not supported. "+
+			"Supported ones are %v", cpusDistPolicy, supportedCPUsDistributionPolicies)
+	}
+
+	return cpusDistPolicy, nil
+}
+
+func cpusDistPolicyAnnotationKey(containerName string) string {
+	return containerName + "/cpus-distribution-policy"
 }
 
 // If getRequestedFarMemBytes returns an error, it also returns a 0 quantity, because the caller is a
