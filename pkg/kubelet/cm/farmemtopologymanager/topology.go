@@ -158,6 +158,18 @@ func initTopology(machineInfo *cadvisor.MachineInfo) *topology {
 		}
 	}
 
+	for _, n := range t.NNUMANodes {
+		for _, cCPUs := range n.IdleCoresToCPUs {
+			t.CPUsPerCore = uint16(cCPUs.Size())
+			break
+		}
+		for _, llcCPUs := range n.IdleLLCsToCPUs {
+			t.CPUsPerLLC = uint16(llcCPUs.Size())
+			break
+		}
+		break
+	}
+
 	// Now initialize the neighboring relationships between nodes.
 	// First, initialize those between n and z NUMAs.
 	// To do that, use Linux sysfs files described here: https://docs.kernel.org/admin-guide/mm/numaperf.html.
