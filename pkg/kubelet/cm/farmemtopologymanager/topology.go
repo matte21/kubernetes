@@ -86,8 +86,8 @@ type nNUMANode struct {
 	EmptyCoresToCPUs        map[int]cpuset.CPUSet
 	NonEmptyCoresToFreeCPUs map[int]cpuset.CPUSet
 
-	// EmptyLLCsToCPUs        map[int]cpuset.CPUSet
-	// NonEmptyLLCsToFreeCPUs map[int]cpuset.CPUSet
+	EmptyLLCsToCPUs        map[int]cpuset.CPUSet
+	NonEmptyLLCsToFreeCPUs map[int]cpuset.CPUSet
 
 	cpuToCoreAndLLC map[int]cpuParents
 
@@ -303,20 +303,27 @@ func (t *topology) addNNUMA(nn cadvisor.Node) {
 	cpusIDs := make([]int, 0, numCPUs)
 	cpuToCoreAndLLC := make(map[int]cpuParents, numCPUs)
 	emptyCoresToCPUs := make(map[int]cpuset.CPUSet, len(nn.Cores))
+	emptyLLCsToCPUs := make(map[int]cpuset.CPUSet)
 
 	for _, c := range nn.Cores {
 		coreID, err := getUniqueCoreID(c.Threads)
 		if err != nil {
 			panic(fmt.Errorf("failed to get unique core ID: %v. This should never happen and is unrecoverable", err))
 		}
+		llcID := getUncoreCacheID(c)
 		for _, cpuID := range c.Threads {
 			cpuToCoreAndLLC[cpuID] = cpuParents{
 				coreID: coreID,
-				llcID:  getUncoreCacheID(c),
+				llcID:  llcID,
 			}
 		}
 		cpusIDs = append(cpusIDs, c.Threads...)
 		emptyCoresToCPUs[coreID] = cpuset.New(c.Threads...)
+		llcCPUs, ok := emptyLLCsToCPUs[llcID]
+		if !ok {
+			llcCPUs = cpuset.New()
+		}
+		emptyLLCsToCPUs[llcID] = llcCPUs.Union(cpuset.New(c.Threads...))
 	}
 
 	t.AllCPUs = t.AllCPUs.Union(cpuset.New(cpusIDs...))
@@ -338,6 +345,9 @@ func (t *topology) addNNUMA(nn cadvisor.Node) {
 		ReservedCPUs:            cpuset.New(),
 		NeighborZNUMAs:          make(map[int]struct{}, 0),
 		NeighborNNUMAsBySocket:  make(map[int]map[int]struct{}),
+
+		EmptyLLCsToCPUs:        emptyLLCsToCPUs,
+		NonEmptyLLCsToFreeCPUs: make(map[int]cpuset.CPUSet),
 	}
 	t.NNUMAsSortedByNeighborFarMemory = append(t.NNUMAsSortedByNeighborFarMemory, nn.Id)
 
