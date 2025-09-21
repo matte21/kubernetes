@@ -83,8 +83,8 @@ type nNUMANode struct {
 	FreeCPUs     cpuset.CPUSet
 	ReservedCPUs cpuset.CPUSet
 
-	// EmptyCoresToCPUs        map[int]cpuset.CPUSet
-	// NonEmptyCoresToFreeCPUs map[int]cpuset.CPUSet
+	EmptyCoresToCPUs        map[int]cpuset.CPUSet
+	NonEmptyCoresToFreeCPUs map[int]cpuset.CPUSet
 
 	// EmptyLLCsToCPUs        map[int]cpuset.CPUSet
 	// NonEmptyLLCsToFreeCPUs map[int]cpuset.CPUSet
@@ -297,12 +297,12 @@ func (t *topology) addZNUMA(zn cadvisor.Node) {
 }
 
 func (t *topology) addNNUMA(nn cadvisor.Node) {
-	numCPUs := len(nn.Cores) * len(nn.Cores[0].Threads)
-	cpuToCoreAndLLC := make(map[int]cpuParents, numCPUs)
-
 	// Glossary: with hyperthreading, a cpu is a hardware thread, while without
 	// hyperthreading a CPU is a physical core (as far as this code is concerned).
+	numCPUs := len(nn.Cores) * len(nn.Cores[0].Threads)
 	cpusIDs := make([]int, 0, numCPUs)
+	cpuToCoreAndLLC := make(map[int]cpuParents, numCPUs)
+	emptyCoresToCPUs := make(map[int]cpuset.CPUSet, len(nn.Cores))
 
 	for _, c := range nn.Cores {
 		coreID, err := getUniqueCoreID(c.Threads)
@@ -310,12 +310,13 @@ func (t *topology) addNNUMA(nn cadvisor.Node) {
 			panic(fmt.Errorf("failed to get unique core ID: %v. This should never happen and is unrecoverable", err))
 		}
 		for _, cpuID := range c.Threads {
-			cpusIDs = append(cpusIDs, cpuID)
 			cpuToCoreAndLLC[cpuID] = cpuParents{
 				coreID: coreID,
 				llcID:  getUncoreCacheID(c),
 			}
 		}
+		cpusIDs = append(cpusIDs, c.Threads...)
+		emptyCoresToCPUs[coreID] = cpuset.New(c.Threads...)
 	}
 
 	t.AllCPUs = t.AllCPUs.Union(cpuset.New(cpusIDs...))
@@ -330,11 +331,13 @@ func (t *topology) addNNUMA(nn cadvisor.Node) {
 			AllocatableBytes: nn.Memory,
 			FreeBytes:        nn.Memory,
 		},
-		cpuToCoreAndLLC:        cpuToCoreAndLLC,
-		FreeCPUs:               cpuset.New(cpusIDs...),
-		ReservedCPUs:           cpuset.New(),
-		NeighborZNUMAs:         make(map[int]struct{}, 0),
-		NeighborNNUMAsBySocket: make(map[int]map[int]struct{}),
+		EmptyCoresToCPUs:        emptyCoresToCPUs,
+		NonEmptyCoresToFreeCPUs: make(map[int]cpuset.CPUSet),
+		cpuToCoreAndLLC:         cpuToCoreAndLLC,
+		FreeCPUs:                cpuset.New(cpusIDs...),
+		ReservedCPUs:            cpuset.New(),
+		NeighborZNUMAs:          make(map[int]struct{}, 0),
+		NeighborNNUMAsBySocket:  make(map[int]map[int]struct{}),
 	}
 	t.NNUMAsSortedByNeighborFarMemory = append(t.NNUMAsSortedByNeighborFarMemory, nn.Id)
 
