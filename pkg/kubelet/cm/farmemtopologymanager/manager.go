@@ -740,17 +740,17 @@ func (m *Manager) RemoveContainer(containerID string) error {
 				cset := cpuset.New(cpu)
 
 				core := n.cpuToCoreAndLLC[cpu].coreID
-				n.NonEmptyCoresToFreeCPUs[core] = n.NonEmptyCoresToFreeCPUs[core].Union(cset)
-				if len(n.NonEmptyCoresToFreeCPUs[core].List()) == int(m.topo.CPUsPerCore) {
-					n.EmptyCoresToCPUs[core] = n.NonEmptyCoresToFreeCPUs[core]
-					delete(n.NonEmptyCoresToFreeCPUs, core)
+				n.BusyCoresToFreeCPUs[core] = n.BusyCoresToFreeCPUs[core].Union(cset)
+				if len(n.BusyCoresToFreeCPUs[core].List()) == int(m.topo.CPUsPerCore) {
+					n.IdleCoresToCPUs[core] = n.BusyCoresToFreeCPUs[core]
+					delete(n.BusyCoresToFreeCPUs, core)
 				}
 
 				llc := n.cpuToCoreAndLLC[cpu].llcID
-				n.NonEmptyLLCsToFreeCPUs[llc] = n.NonEmptyLLCsToFreeCPUs[llc].Union(cset)
-				if len(n.NonEmptyLLCsToFreeCPUs[llc].List()) == int(m.topo.CPUsPerLLC) {
-					n.EmptyLLCsToCPUs[llc] = n.NonEmptyLLCsToFreeCPUs[llc]
-					delete(n.NonEmptyLLCsToFreeCPUs, llc)
+				n.BusyLLCsToFreeCPUs[llc] = n.BusyLLCsToFreeCPUs[llc].Union(cset)
+				if len(n.BusyLLCsToFreeCPUs[llc].List()) == int(m.topo.CPUsPerLLC) {
+					n.IdleLLCsToCPUs[llc] = n.BusyLLCsToFreeCPUs[llc]
+					delete(n.BusyLLCsToFreeCPUs, llc)
 				}
 			}
 		}

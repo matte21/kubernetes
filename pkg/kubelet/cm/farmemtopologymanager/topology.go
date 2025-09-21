@@ -86,11 +86,11 @@ type nNUMANode struct {
 	FreeCPUs     cpuset.CPUSet
 	ReservedCPUs cpuset.CPUSet
 
-	EmptyCoresToCPUs        map[int]cpuset.CPUSet
-	NonEmptyCoresToFreeCPUs map[int]cpuset.CPUSet
+	IdleCoresToCPUs     map[int]cpuset.CPUSet
+	BusyCoresToFreeCPUs map[int]cpuset.CPUSet
 
-	EmptyLLCsToCPUs        map[int]cpuset.CPUSet
-	NonEmptyLLCsToFreeCPUs map[int]cpuset.CPUSet
+	IdleLLCsToCPUs     map[int]cpuset.CPUSet
+	BusyLLCsToFreeCPUs map[int]cpuset.CPUSet
 
 	cpuToCoreAndLLC map[int]cpuParents
 
@@ -305,8 +305,8 @@ func (t *topology) addNNUMA(nn cadvisor.Node) {
 	numCPUs := len(nn.Cores) * len(nn.Cores[0].Threads)
 	cpusIDs := make([]int, 0, numCPUs)
 	cpuToCoreAndLLC := make(map[int]cpuParents, numCPUs)
-	emptyCoresToCPUs := make(map[int]cpuset.CPUSet, len(nn.Cores))
-	emptyLLCsToCPUs := make(map[int]cpuset.CPUSet)
+	idleCoresToCPUs := make(map[int]cpuset.CPUSet, len(nn.Cores))
+	idleLLCsToCPUs := make(map[int]cpuset.CPUSet)
 
 	for _, c := range nn.Cores {
 		coreID, err := getUniqueCoreID(c.Threads)
@@ -321,12 +321,12 @@ func (t *topology) addNNUMA(nn cadvisor.Node) {
 			}
 		}
 		cpusIDs = append(cpusIDs, c.Threads...)
-		emptyCoresToCPUs[coreID] = cpuset.New(c.Threads...)
-		llcCPUs, ok := emptyLLCsToCPUs[llcID]
+		idleCoresToCPUs[coreID] = cpuset.New(c.Threads...)
+		llcCPUs, ok := idleLLCsToCPUs[llcID]
 		if !ok {
 			llcCPUs = cpuset.New()
 		}
-		emptyLLCsToCPUs[llcID] = llcCPUs.Union(cpuset.New(c.Threads...))
+		idleLLCsToCPUs[llcID] = llcCPUs.Union(cpuset.New(c.Threads...))
 	}
 
 	t.AllCPUs = t.AllCPUs.Union(cpuset.New(cpusIDs...))
@@ -341,16 +341,15 @@ func (t *topology) addNNUMA(nn cadvisor.Node) {
 			AllocatableBytes: nn.Memory,
 			FreeBytes:        nn.Memory,
 		},
-		EmptyCoresToCPUs:        emptyCoresToCPUs,
-		NonEmptyCoresToFreeCPUs: make(map[int]cpuset.CPUSet),
-		cpuToCoreAndLLC:         cpuToCoreAndLLC,
-		FreeCPUs:                cpuset.New(cpusIDs...),
-		ReservedCPUs:            cpuset.New(),
-		NeighborZNUMAs:          make(map[int]struct{}, 0),
-		NeighborNNUMAsBySocket:  make(map[int]map[int]struct{}),
-
-		EmptyLLCsToCPUs:        emptyLLCsToCPUs,
-		NonEmptyLLCsToFreeCPUs: make(map[int]cpuset.CPUSet),
+		IdleCoresToCPUs:        idleCoresToCPUs,
+		BusyCoresToFreeCPUs:    make(map[int]cpuset.CPUSet),
+		cpuToCoreAndLLC:        cpuToCoreAndLLC,
+		FreeCPUs:               cpuset.New(cpusIDs...),
+		ReservedCPUs:           cpuset.New(),
+		NeighborZNUMAs:         make(map[int]struct{}, 0),
+		NeighborNNUMAsBySocket: make(map[int]map[int]struct{}),
+		IdleLLCsToCPUs:         idleLLCsToCPUs,
+		BusyLLCsToFreeCPUs:     make(map[int]cpuset.CPUSet),
 	}
 	t.NNUMAsSortedByNeighborFarMemory = append(t.NNUMAsSortedByNeighborFarMemory, nn.Id)
 
