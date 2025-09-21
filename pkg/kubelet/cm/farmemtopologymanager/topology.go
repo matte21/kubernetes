@@ -39,6 +39,9 @@ type topology struct {
 	// reconstructing it every time this information is needed.
 	AllCPUs cpuset.CPUSet
 
+	CPUsPerCore uint16
+	CPUsPerLLC  uint16
+
 	// A subset of the shared pool which is not exclusively allocatable. The membership of this pool
 	// is static for the lifetime of the Kubelet. The size of the reserved pool is
 	// ceil(systemreserved.cpu + kubereserved.cpu). Reserved CPUs are either taken topologically

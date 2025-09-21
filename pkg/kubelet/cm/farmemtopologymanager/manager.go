@@ -729,12 +729,30 @@ func (m *Manager) RemoveContainer(containerID string) error {
 			}
 		}
 
-		// Free CPUs.
+		// Free CPUs. This code is perversely inefficient, but I don't have time to fix it now.
 		m.defaultCPUSetChanged = true
 		for _, n := range m.topo.NNUMANodes {
 			cpusToFree := n.ReservedCPUs.Intersection(cntAlloc.CPUs)
 			n.ReservedCPUs = n.ReservedCPUs.Difference(cpusToFree)
 			n.FreeCPUs = n.FreeCPUs.Union(cpusToFree)
+
+			for _, cpu := range cpusToFree.List() {
+				cset := cpuset.New(cpu)
+
+				core := n.cpuToCoreAndLLC[cpu].coreID
+				n.NonEmptyCoresToFreeCPUs[core] = n.NonEmptyCoresToFreeCPUs[core].Union(cset)
+				if len(n.NonEmptyCoresToFreeCPUs[core].List()) == int(m.topo.CPUsPerCore) {
+					n.EmptyCoresToCPUs[core] = n.NonEmptyCoresToFreeCPUs[core]
+					delete(n.NonEmptyCoresToFreeCPUs, core)
+				}
+
+				llc := n.cpuToCoreAndLLC[cpu].llcID
+				n.NonEmptyLLCsToFreeCPUs[llc] = n.NonEmptyLLCsToFreeCPUs[llc].Union(cset)
+				if len(n.NonEmptyLLCsToFreeCPUs[llc].List()) == int(m.topo.CPUsPerLLC) {
+					n.EmptyLLCsToCPUs[llc] = n.NonEmptyLLCsToFreeCPUs[llc]
+					delete(n.NonEmptyLLCsToFreeCPUs, llc)
+				}
+			}
 		}
 
 		heap.Init(m.topo.nNUMAsByFreeMem)
