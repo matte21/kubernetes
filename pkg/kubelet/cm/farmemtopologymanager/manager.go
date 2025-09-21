@@ -49,28 +49,38 @@ type runtimeService interface {
 	UpdateContainerResources(ctx context.Context, id string, resources *runtimeapi.ContainerResources) error
 }
 
-// Constants corresponding to the different ways to distribute CPUs across NUMA nodes and caches.
+// Constants corresponding to the different ways to distribute CPUs across NUMA nodes.
 const (
-	PackEagerly = "pack-eagerly"
-	NUMAEven    = "interleave"
-	LLCShare    = "llc-share"
-	L1Share     = "l1-share"
-	L1Spread    = "l1-spread"
+	Pack = "pack"
+	Even = "even"
 )
 
-var supportedCPUsDistributionPolicies map[string]struct{} = map[string]struct{}{
-	PackEagerly: {},
-	NUMAEven:    {},
-	LLCShare:    {},
-	L1Share:     {},
-	L1Spread:    {},
+var supportedCPUsDistributionsOverNUMAs map[string]struct{} = map[string]struct{}{
+	Pack: {},
+	Even: {},
+}
+
+// Constants corresponding to the different ways to distribute CPUs across caches.
+const (
+	Nop      = "nop"
+	LLCShare = "llc-share"
+	L1Share  = "l1-share"
+	L1Spread = "l1-spread"
+)
+
+var supportedCPUsDistributionsOverCaches map[string]struct{} = map[string]struct{}{
+	Nop:      {},
+	LLCShare: {},
+	L1Share:  {},
+	L1Spread: {},
 }
 
 type resourceRequest struct {
-	localMem, farMem       uint64
-	cpus                   int
-	minNNUMAs, maxNNUMAs   int
-	cpusDistributionPolicy string
+	localMem, farMem           uint64
+	minNNUMAs, maxNNUMAs       int
+	cpus                       int
+	cpusDistributionOverNUMAs  string
+	cpusDistributionOverCaches string
 }
 
 type Manager struct {
@@ -515,7 +525,7 @@ func (m *Manager) parseContainerReqs(p *v1.Pod, c *v1.Container) (resourceReques
 	// TODO: handle the case where the CPU request is 0 (is it even possible for Guaranteed pods?)
 	rr.cpus = getRequestedCPUs(p, c)
 
-	rr.cpusDistributionPolicy, err = getRequestCPUsDistPolicy(p, c)
+	rr.cpusDistributionOverNUMAs, rr.cpusDistributionOverCaches, err = getRequestCPUsDistPolicy(p, c)
 	if err != nil {
 		return rr, fmt.Errorf("failed to parse CPUs distribution policy: %v", err)
 	}
@@ -528,25 +538,35 @@ func (m *Manager) parseContainerReqs(p *v1.Pod, c *v1.Container) (resourceReques
 	return rr, nil
 }
 
-func getRequestCPUsDistPolicy(p *v1.Pod, c *v1.Container) (string, error) {
-	cpusDistPolicyAnnotationKey := cpusDistPolicyAnnotationKey(c.Name)
+func getRequestCPUsDistPolicy(p *v1.Pod, c *v1.Container) (distOverNUMAs, distOverCaches string, err error) {
+	distOverNUMAsKey, distOverCachesKey := cpusDistPolicyAnnotationKeys(c.Name)
 
-	cpusDistPolicy, ok := p.Annotations[cpusDistPolicyAnnotationKey]
+	distOverNUMAs, ok := p.Annotations[distOverNUMAsKey]
 	if !ok {
-		// PackEagerly is the default, same as the baseline kubelet.
-		return PackEagerly, nil
+		distOverNUMAs = Pack
+	}
+	if _, isSupported := supportedCPUsDistributionsOverNUMAs[distOverNUMAs]; !isSupported {
+		err = fmt.Errorf("requested CPUs distribution policy over NUMAs %s is not supported. "+
+			"Supported ones are %v", distOverNUMAs, supportedCPUsDistributionsOverNUMAs)
+		return
 	}
 
-	if _, ok := supportedCPUsDistributionPolicies[cpusDistPolicy]; !ok {
-		return "", fmt.Errorf("requested CPUs distribution policy %s is not supported. "+
-			"Supported ones are %v", cpusDistPolicy, supportedCPUsDistributionPolicies)
+	distOverCaches, ok = p.Annotations[distOverCachesKey]
+	if !ok {
+		distOverCaches = Nop
+	}
+	if _, isSupported := supportedCPUsDistributionsOverCaches[distOverCaches]; !isSupported {
+		err = fmt.Errorf("requested CPUs distribution policy over Caches %s is not supported. "+
+			"Supported ones are %v", distOverCaches, supportedCPUsDistributionsOverCaches)
 	}
 
-	return cpusDistPolicy, nil
+	return
 }
 
-func cpusDistPolicyAnnotationKey(containerName string) string {
-	return containerName + "/cpus-distribution-policy"
+func cpusDistPolicyAnnotationKeys(containerName string) (distOverNUMAsKey, distOverCachesKey string) {
+	distOverNUMAsKey = containerName + "/cpus-distribution-over-numas"
+	distOverCachesKey = containerName + "/cpus-distribution-over-caches"
+	return
 }
 
 // If getRequestedFarMemBytes returns an error, it also returns a 0 quantity, because the caller is a
