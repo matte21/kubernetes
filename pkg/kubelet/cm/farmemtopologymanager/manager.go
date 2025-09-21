@@ -736,10 +736,10 @@ func (m *Manager) RemoveContainer(containerID string) error {
 			n.ReservedCPUs = n.ReservedCPUs.Difference(cpusToFree)
 			n.FreeCPUs = n.FreeCPUs.Union(cpusToFree)
 		}
-	}
 
-	heap.Init(m.topo.nNUMAsByFreeMem)
-	heap.Init(m.topo.nNUMAsByFreeCPUs)
+		heap.Init(m.topo.nNUMAsByFreeMem)
+		heap.Init(m.topo.nNUMAsByFreeCPUs)
+	}
 
 	return nil
 }
