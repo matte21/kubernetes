@@ -72,6 +72,10 @@ func (t *topology) numaNodeMem(id int) (*Mem, bool) {
 	return nil, false
 }
 
+type cpuParents struct {
+	coreID, llcID int
+}
+
 type nNUMANode struct {
 	ID       int
 	SocketID int
@@ -85,8 +89,7 @@ type nNUMANode struct {
 	// EmptyLLCsToCPUs        map[int]cpuset.CPUSet
 	// NonEmptyLLCsToFreeCPUs map[int]cpuset.CPUSet
 
-	// cpuToCoreID map[int]int
-	// cpuToLLCID  map[int]int
+	cpuToCoreAndLLC map[int]cpuParents
 
 	// If SNC is off, there's a 1:1 mapping between sockets and nNUMAs. So NeighborNNUMAsBySocket
 	// maps each socket directly connected to this nNUMA's socket to the nNUMA contained by that
@@ -294,15 +297,25 @@ func (t *topology) addZNUMA(zn cadvisor.Node) {
 }
 
 func (t *topology) addNNUMA(nn cadvisor.Node) {
+	numCPUs := len(nn.Cores) * len(nn.Cores[0].Threads)
+	cpuToCoreAndLLC := make(map[int]cpuParents, numCPUs)
+
 	// Glossary: with hyperthreading, a cpu is a hardware thread, while without
 	// hyperthreading a CPU is a physical core (as far as this code is concerned).
-	cpusIDs := make([]int, 0, len(nn.Cores)*len(nn.Cores[0].Threads))
+	cpusIDs := make([]int, 0, numCPUs)
 
-	// The following code assumes that core ID = thread ID when hyper-threading is off.
-	// I didn't check the assumption myself, but the vanilla K8s CPU manager code makes the
-	// same assumption, so I guess it's safe to make it here as well.
 	for _, c := range nn.Cores {
-		cpusIDs = append(cpusIDs, c.Threads...)
+		coreID, err := getUniqueCoreID(c.Threads)
+		if err != nil {
+			panic(fmt.Errorf("failed to get unique core ID: %v. This should never happen and is unrecoverable", err))
+		}
+		for _, cpuID := range c.Threads {
+			cpusIDs = append(cpusIDs, cpuID)
+			cpuToCoreAndLLC[cpuID] = cpuParents{
+				coreID: coreID,
+				llcID:  getUncoreCacheID(c),
+			}
+		}
 	}
 
 	t.AllCPUs = t.AllCPUs.Union(cpuset.New(cpusIDs...))
@@ -317,6 +330,7 @@ func (t *topology) addNNUMA(nn cadvisor.Node) {
 			AllocatableBytes: nn.Memory,
 			FreeBytes:        nn.Memory,
 		},
+		cpuToCoreAndLLC:        cpuToCoreAndLLC,
 		FreeCPUs:               cpuset.New(cpusIDs...),
 		ReservedCPUs:           cpuset.New(),
 		NeighborZNUMAs:         make(map[int]struct{}, 0),
@@ -403,4 +417,35 @@ func (*FreeResourcesMaxHeap) Push(x any) {
 
 func (*FreeResourcesMaxHeap) Pop() any {
 	panic("Pop is unimplemented and you should never call it.")
+}
+
+// copied verbatim from cpu manager package.
+func getUniqueCoreID(threads []int) (coreID int, err error) {
+	if len(threads) == 0 {
+		return 0, fmt.Errorf("no cpus provided")
+	}
+
+	if len(threads) != cpuset.New(threads...).Size() {
+		return 0, fmt.Errorf("cpus provided are not unique")
+	}
+
+	min := threads[0]
+	for _, thread := range threads[1:] {
+		if thread < min {
+			min = thread
+		}
+	}
+
+	return min, nil
+}
+
+// copied verbatim from CPU manager package.
+func getUncoreCacheID(core cadvisor.Core) int {
+	if len(core.UncoreCaches) < 1 {
+		// In case cAdvisor is nil, failback to socket alignment since uncorecache is not shared
+		return core.SocketID
+	}
+	// Even though cadvisor API returns a slice, we only expect either 0 or a 1 uncore caches,
+	// so everything past the first entry should be discarded or ignored
+	return core.UncoreCaches[0].Id
 }
