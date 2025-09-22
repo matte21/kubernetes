@@ -301,6 +301,7 @@ func (m *Manager) Admit(attrs *lifecycle.PodAdmitAttributes) lifecycle.PodAdmitR
 		alloc.CPUs = allocatedCPUs
 
 		// Allocate local memory.
+		// TODO: weight this by number of CPUs contributed.
 		memBytesPerCPUGiver := req.localMem / uint64(len(cpuGivers))
 		for nID := range cpuGivers {
 			n := m.topo.NNUMANodes[nID]
@@ -373,56 +374,7 @@ func (m *Manager) Admit(attrs *lifecycle.PodAdmitAttributes) lifecycle.PodAdmitR
 }
 
 // nNUMAs is the set of nNUMA nodes to allocate `numToAlloc` CPUs from.
-func (m *Manager) allocateCPUs(nNUMAs []int, numToAlloc int) (cpuset.CPUSet, map[int]struct{}) {
-	allocatedCPUs := cpuset.New()
-
-	// Set of nNUMAs that actually contribute CPUs to the allocation.
-	cpuGivers := make(map[int]struct{}, len(nNUMAs))
-
-	for _, nID := range nNUMAs {
-		n := m.topo.NNUMANodes[nID]
-
-		if allocatedCPUs.Size() == numToAlloc {
-			break
-		}
-
-		if n.FreeCPUs.IsEmpty() {
-			continue
-		}
-
-		// We still need CPUs, and n has some: we'll allocate from it.
-		cpuGivers[nID] = struct{}{}
-
-		var cs cpuset.CPUSet
-		if allocatedCPUs.Size()+n.FreeCPUs.Size() > numToAlloc {
-			// If we're here, n has more free CPUs than those needed to completely satisfy the
-			// allocation.
-			cpus := make([]int, 0, numToAlloc-allocatedCPUs.Size())
-			for _, fc := range n.FreeCPUs.List() {
-				cpus = append(cpus, fc)
-				if len(cpus)+allocatedCPUs.Size() == numToAlloc {
-					break
-				}
-			}
-			cs = cpuset.New(cpus...)
-		} else {
-			// If we're here, n has less or just enough free CPUs to completely satisfy the
-			// allocation.
-			cs = n.FreeCPUs
-		}
-
-		allocatedCPUs = allocatedCPUs.Union(cs)
-		n.ReservedCPUs = n.ReservedCPUs.Union(cs)
-		n.FreeCPUs = n.FreeCPUs.Difference(cs)
-		m.defaultCPUSetChanged = true
-	}
-
-	heap.Init(m.topo.nNUMAsByFreeCPUs)
-
-	return allocatedCPUs, cpuGivers
-}
-
-// nNUMAs is the set of nNUMA nodes to allocate `numToAlloc` CPUs from.
+// TODO: implement dist CPU selection strategy.
 func (m *Manager) allocateCPUs2(nNUMAs []int, numToAlloc int, cacheDist string, wantFarMem bool) (cpuset.CPUSet, map[int]struct{}) {
 	allocatedCPUs := cpuset.New()
 
