@@ -555,8 +555,68 @@ func (m *Manager) getCPUsLLCShare(n *nNUMANode, remainingToAlloc int) []int {
 	return allocated
 }
 
-func (m *Manager) getCPUsL1Share(n *nNUMANode, numToAlloc int) []int {
-	panic("unimplemented")
+func (m *Manager) getCPUsL1Share(n *nNUMANode, remainingToAlloc int) []int {
+	allocated := make([]int, 0, remainingToAlloc)
+	cpusPerCore := int(m.topo.CPUsPerCore)
+
+	defer func() {
+		updateCoresAndLLCsMaps(n, allocated)
+	}()
+
+	for _, cpus := range n.IdleCoresToCPUs {
+		if remainingToAlloc == 0 {
+			return allocated
+		}
+
+		if remainingToAlloc >= cpusPerCore {
+			allocated = append(allocated, cpus.List()...)
+			remainingToAlloc -= cpusPerCore
+			continue
+		}
+
+		for _, cpu := range cpus.List() {
+			allocated = append(allocated, cpu)
+			remainingToAlloc--
+			if remainingToAlloc == 0 {
+				return allocated
+			}
+		}
+	}
+
+	if remainingToAlloc == 0 {
+		return allocated
+	}
+
+	busyCores := make([]int, 0, len(n.BusyCoresToFreeCPUs))
+	for core := range n.BusyCoresToFreeCPUs {
+		busyCores = append(busyCores, core)
+	}
+	slices.SortFunc(busyCores, func(x, y int) int {
+		return n.BusyCoresToFreeCPUs[y].Size() - n.BusyCoresToFreeCPUs[x].Size()
+	})
+
+	for _, core := range busyCores {
+		if remainingToAlloc == 0 {
+			return allocated
+		}
+
+		cpus := n.BusyCoresToFreeCPUs[core]
+		if remainingToAlloc >= cpus.Size() {
+			allocated = append(allocated, cpus.List()...)
+			remainingToAlloc -= cpus.Size()
+			continue
+		}
+
+		for _, cpu := range cpus.List() {
+			allocated = append(allocated, cpu)
+			remainingToAlloc--
+			if remainingToAlloc == 0 {
+				return allocated
+			}
+		}
+	}
+
+	return allocated
 }
 
 func (m *Manager) getCPUsL1Spread(n *nNUMANode, numToAlloc int) []int {
