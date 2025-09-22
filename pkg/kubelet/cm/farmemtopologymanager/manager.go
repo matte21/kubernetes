@@ -22,6 +22,7 @@ import (
 	"k8s.io/kubernetes/pkg/kubelet/cm/containermap"
 	"k8s.io/kubernetes/pkg/kubelet/cm/memorymanager/state"
 	"k8s.io/kubernetes/pkg/kubelet/cm/topologymanager"
+	"k8s.io/kubernetes/pkg/kubelet/cm/topologymanager/bitmask"
 	kubecontainer "k8s.io/kubernetes/pkg/kubelet/container"
 	"k8s.io/kubernetes/pkg/kubelet/lifecycle"
 	"k8s.io/kubernetes/pkg/kubelet/status"
@@ -1329,4 +1330,34 @@ func updateCoresAndLLCsMaps(n *nNUMANode, cpus []int) {
 		}
 		n.BusyLLCsToFreeCPUs[llc] = freeLLCCPUs.Difference(cset)
 	}
+}
+
+func (m *Manager) candidateBetterThanCurrent(candidate, current []int) bool {
+	if len(current) == 0 || len(candidate) < len(current) {
+		return true
+	}
+
+	candidateDistance := uint64(0)
+	for _, i := range candidate {
+		for _, j := range candidate {
+			candidateDistance += m.topo.NUMADistanceMatrix[i][j]
+		}
+	}
+	candidateDistanceFlt := float64(candidateDistance) / float64(len(candidate))
+
+	currentDistance := uint64(0)
+	for _, i := range current {
+		for _, j := range current {
+			currentDistance += m.topo.NUMADistanceMatrix[i][j]
+		}
+	}
+	currentDistanceFlt := float64(currentDistance) / float64(len(current))
+
+	if currentDistanceFlt == candidateDistanceFlt {
+		curMask, _ := bitmask.NewBitMask(current...)
+		candMask, _ := bitmask.NewBitMask(candidate...)
+		return candMask.IsLessThan(curMask)
+	}
+
+	return candidateDistanceFlt < currentDistanceFlt
 }

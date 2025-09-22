@@ -63,6 +63,8 @@ type topology struct {
 	// needed to satisfy an allocation, and we can start searching form combos of NUMAs of that size.
 	nNUMAsByFreeCPUs *FreeResourcesMaxHeap
 	nNUMAsByFreeMem  *FreeResourcesMaxHeap
+
+	NUMADistanceMatrix map[int][]uint64
 }
 
 func (t *topology) numaNodeMem(id int) (*Mem, bool) {
@@ -280,6 +282,8 @@ func initTopology(machineInfo *cadvisor.MachineInfo) *topology {
 
 	t.nNUMAsByFreeCPUs = newMaxHeap(t, true)
 	t.nNUMAsByFreeMem = newMaxHeap(t, false)
+
+	t.NUMADistanceMatrix = distanceMatrix
 
 	return t
 }
