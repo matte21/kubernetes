@@ -62,14 +62,12 @@ var supportedCPUsDistributionsOverNUMAs map[string]struct{} = map[string]struct{
 
 // Constants corresponding to the different ways to distribute CPUs across caches.
 const (
-	Nop      = "nop"
 	LLCShare = "llc-share"
 	L1Share  = "l1-share"
 	L1Spread = "l1-spread"
 )
 
 var supportedCPUsDistributionsOverCaches map[string]struct{} = map[string]struct{}{
-	Nop:      {},
 	LLCShare: {},
 	L1Share:  {},
 	L1Spread: {},
@@ -553,7 +551,7 @@ func getRequestCPUsDistPolicy(p *v1.Pod, c *v1.Container) (distOverNUMAs, distOv
 
 	distOverCaches, ok = p.Annotations[distOverCachesKey]
 	if !ok {
-		distOverCaches = Nop
+		distOverCaches = L1Share
 	}
 	if _, isSupported := supportedCPUsDistributionsOverCaches[distOverCaches]; !isSupported {
 		err = fmt.Errorf("requested CPUs distribution policy over Caches %s is not supported. "+
