@@ -301,17 +301,17 @@ func (m *Manager) Admit(attrs *lifecycle.PodAdmitAttributes) lifecycle.PodAdmitR
 		alloc.CPUs = allocatedCPUs
 
 		// Allocate local memory.
-		// TODO: weight this by number of CPUs contributed.
-		memBytesPerCPUGiver := req.localMem / uint64(len(cpuGivers))
+		localMemReq := req.localMem
 		for nID := range cpuGivers {
 			n := m.topo.NNUMANodes[nID]
 			if n.FreeBytes == 0 {
 				continue
 			}
-			if n.FreeBytes >= memBytesPerCPUGiver {
-				req.localMem -= memBytesPerCPUGiver
-				alloc.PerNUMANodeMemBytes[nID] += memBytesPerCPUGiver
-				n.FreeBytes -= memBytesPerCPUGiver
+			bytesOnThisNode := uint64(float64(localMemReq) * float64(cpuGivers[nID]) / float64(req.cpus))
+			if n.FreeBytes >= bytesOnThisNode {
+				req.localMem -= bytesOnThisNode
+				alloc.PerNUMANodeMemBytes[nID] += bytesOnThisNode
+				n.FreeBytes -= bytesOnThisNode
 			} else {
 				req.localMem -= n.FreeBytes
 				alloc.PerNUMANodeMemBytes[nID] += n.FreeBytes
@@ -375,7 +375,7 @@ func (m *Manager) Admit(attrs *lifecycle.PodAdmitAttributes) lifecycle.PodAdmitR
 
 // nNUMAs is the set of nNUMA nodes to allocate `numToAlloc` CPUs from.
 // TODO: implement dist CPU selection strategy.
-func (m *Manager) allocateCPUs2(nNUMAs []int, numToAlloc int, cacheDist string, wantFarMem bool) (cpuset.CPUSet, map[int]struct{}) {
+func (m *Manager) allocateCPUs2(nNUMAs []int, numToAlloc int, cacheDist string, wantFarMem bool) (cpuset.CPUSet, map[int]int) {
 	allocatedCPUs := cpuset.New()
 
 	slices.SortFunc(nNUMAs, func(n1ID, n2ID int) int {
@@ -392,7 +392,7 @@ func (m *Manager) allocateCPUs2(nNUMAs []int, numToAlloc int, cacheDist string, 
 	})
 
 	// Set of nNUMAs that actually contribute CPUs to the allocation.
-	cpuGivers := make(map[int]struct{}, len(nNUMAs))
+	cpuGivers := make(map[int]int, len(nNUMAs))
 
 	for _, nID := range nNUMAs {
 		if allocatedCPUs.Size() == numToAlloc {
@@ -405,9 +405,6 @@ func (m *Manager) allocateCPUs2(nNUMAs []int, numToAlloc int, cacheDist string, 
 			continue
 		}
 
-		// We still need CPUs, and n has some: we'll allocate from it.
-		cpuGivers[nID] = struct{}{}
-
 		var cs cpuset.CPUSet
 		if allocatedCPUs.Size()+n.FreeCPUs.Size() > numToAlloc {
 			// If we're here, n has more free CPUs than those needed to completely satisfy the
@@ -419,6 +416,8 @@ func (m *Manager) allocateCPUs2(nNUMAs []int, numToAlloc int, cacheDist string, 
 			cs = n.FreeCPUs
 			updateCoresAndLLCsMaps(n, cs.List())
 		}
+
+		cpuGivers[nID] = cs.Size()
 
 		allocatedCPUs = allocatedCPUs.Union(cs)
 		n.ReservedCPUs = n.ReservedCPUs.Union(cs)
