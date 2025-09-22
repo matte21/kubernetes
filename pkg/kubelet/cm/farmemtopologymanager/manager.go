@@ -472,6 +472,7 @@ func (m *Manager) allocateCPUs2(nNUMAs []int, numToAlloc int, cacheDist string, 
 			// If we're here, n has less or just enough free CPUs to completely satisfy the
 			// allocation.
 			cs = n.FreeCPUs
+			updateCoresAndLLCsMaps(n, cs.List())
 		}
 
 		allocatedCPUs = allocatedCPUs.Union(cs)
@@ -1176,33 +1177,12 @@ func getSysReservedCPUs(t *topology, numSysReservedCPUs int) cpuset.CPUSet {
 	return cpuset.New(sysReservedCPUs...)
 }
 
-func setSysReservedCPUs(t *topology, sysResCPUs cpuset.CPUSet) {
-	t.SystemReservedCPUs = sysResCPUs
-	for _, n := range t.NNUMANodes {
+func setSysReservedCPUs(topo *topology, sysResCPUs cpuset.CPUSet) {
+	topo.SystemReservedCPUs = sysResCPUs
+	for _, n := range topo.NNUMANodes {
 		sysResCPUsInN := n.FreeCPUs.Intersection(sysResCPUs)
 		n.FreeCPUs = n.FreeCPUs.Difference(sysResCPUsInN)
-
-		for _, cpu := range sysResCPUsInN.List() {
-			cset := cpuset.New(cpu)
-
-			core := n.cpuToCoreAndLLC[cpu].coreID
-			freeCoreCPUs, ok := n.IdleCoresToCPUs[core]
-			if ok {
-				delete(n.IdleCoresToCPUs, core)
-			} else {
-				freeCoreCPUs = n.BusyCoresToFreeCPUs[core]
-			}
-			n.BusyCoresToFreeCPUs[core] = freeCoreCPUs.Difference(cset)
-
-			llc := n.cpuToCoreAndLLC[cpu].llcID
-			freeLLCCPUs, ok := n.IdleLLCsToCPUs[llc]
-			if ok {
-				delete(n.IdleLLCsToCPUs, llc)
-			} else {
-				freeLLCCPUs = n.BusyLLCsToFreeCPUs[llc]
-			}
-			n.BusyLLCsToFreeCPUs[llc] = freeLLCCPUs.Difference(cset)
-		}
+		updateCoresAndLLCsMaps(n, sysResCPUsInN.List())
 	}
 }
 
@@ -1220,4 +1200,28 @@ func (m *Manager) updateContainerCPUSet(ctx context.Context, containerID string,
 				CpusetCpus: cpus.String(),
 			},
 		})
+}
+
+func updateCoresAndLLCsMaps(n *nNUMANode, cpus []int) {
+	for _, cpu := range cpus {
+		cset := cpuset.New(cpu)
+
+		core := n.cpuToCoreAndLLC[cpu].coreID
+		freeCoreCPUs, ok := n.IdleCoresToCPUs[core]
+		if ok {
+			delete(n.IdleCoresToCPUs, core)
+		} else {
+			freeCoreCPUs = n.BusyCoresToFreeCPUs[core]
+		}
+		n.BusyCoresToFreeCPUs[core] = freeCoreCPUs.Difference(cset)
+
+		llc := n.cpuToCoreAndLLC[cpu].llcID
+		freeLLCCPUs, ok := n.IdleLLCsToCPUs[llc]
+		if ok {
+			delete(n.IdleLLCsToCPUs, llc)
+		} else {
+			freeLLCCPUs = n.BusyLLCsToFreeCPUs[llc]
+		}
+		n.BusyLLCsToFreeCPUs[llc] = freeLLCCPUs.Difference(cset)
+	}
 }
