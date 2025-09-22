@@ -619,8 +619,25 @@ func (m *Manager) getCPUsL1Share(n *nNUMANode, remainingToAlloc int) []int {
 	return allocated
 }
 
-func (m *Manager) getCPUsL1Spread(n *nNUMANode, numToAlloc int) []int {
-	panic("unimplemented")
+func (m *Manager) getCPUsL1Spread(n *nNUMANode, remainingToAlloc int) []int {
+	// TODO: make this function's implementation portable. Currently it relies on the fact that on
+	// both of my testbeds cpu i and i+1 do NOT share L1 cache. But that's not true across all
+	// platforms.
+	allocated := make([]int, 0, remainingToAlloc)
+
+	defer func() {
+		updateCoresAndLLCsMaps(n, allocated)
+	}()
+
+	for cpu := range n.FreeCPUs.List() {
+		allocated = append(allocated, cpu)
+		remainingToAlloc--
+		if remainingToAlloc == 0 {
+			break
+		}
+	}
+
+	return allocated
 }
 
 func (m *Manager) minNumNNUMAsGivenFreeResources(reqCPUs int, reqMem uint64) int {
