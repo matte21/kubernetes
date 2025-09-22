@@ -416,12 +416,20 @@ func (m *Manager) allocateCPUs(nNUMAs []int, numToAlloc int, cacheDist string, w
 			updateCoresAndLLCsMaps(n, cs.List())
 		}
 
+		klog.InfoS("Allocating CPUs from numa %d: %v", nID, cs.List())
+
 		cpuGivers[nID] = cs.Size()
 
 		allocatedCPUs = allocatedCPUs.Union(cs)
 		n.ReservedCPUs = n.ReservedCPUs.Union(cs)
 		n.FreeCPUs = n.FreeCPUs.Difference(cs)
 		m.defaultCPUSetChanged = true
+
+		klog.InfoS("numa %d free: %v", nID, n.FreeCPUs.List())
+		klog.InfoS("numa %d idle cores: %v", nID, n.IdleCoresToCPUs)
+		klog.InfoS("numa %d busy cores: %v", nID, n.BusyCoresToFreeCPUs)
+		klog.InfoS("numa %d idle LLCs: %v", nID, n.IdleLLCsToCPUs)
+		klog.InfoS("numa %d busy LLCs: %v", nID, n.BusyLLCsToFreeCPUs)
 	}
 
 	heap.Init(m.topo.nNUMAsByFreeCPUs)
