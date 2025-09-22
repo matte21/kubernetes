@@ -273,24 +273,9 @@ func initTopology(machineInfo *cadvisor.MachineInfo) *topology {
 		}
 	}
 
-	farMemBytesInNeighbors := func(id int) int {
-		nNUMA := t.NNUMANodes[id]
-
-		farMemBytes := uint64(0)
-		for neighborZNUMA := range nNUMA.NeighborZNUMAs {
-			farMemBytes += t.ZNUMANodes[neighborZNUMA].Mem.AllocatableBytes
-		}
-
-		if farMemBytes > uint64(math.MaxInt) {
-			panic(fmt.Errorf("amount of far memory neighboring nNUMA %d overflows", id))
-		}
-
-		return int(farMemBytes)
-	}
-
 	// Sort nNUMAs in ascending order of far memory in neighboring zNUMAs.
 	slices.SortFunc(t.NNUMAsSortedByNeighborFarMemory, func(n1, n2 int) int {
-		return farMemBytesInNeighbors(n1) - farMemBytesInNeighbors(n2)
+		return t.farMemBytesInNeighbors(n1) - t.farMemBytesInNeighbors(n2)
 	})
 
 	t.nNUMAsByFreeCPUs = newMaxHeap(t, true)
@@ -475,4 +460,19 @@ func getUncoreCacheID(core cadvisor.Core) int {
 	// Even though cadvisor API returns a slice, we only expect either 0 or a 1 uncore caches,
 	// so everything past the first entry should be discarded or ignored
 	return core.UncoreCaches[0].Id
+}
+
+func (t *topology) farMemBytesInNeighbors(id int) int {
+	nNUMA := t.NNUMANodes[id]
+
+	farMemBytes := uint64(0)
+	for neighborZNUMA := range nNUMA.NeighborZNUMAs {
+		farMemBytes += t.ZNUMANodes[neighborZNUMA].Mem.AllocatableBytes
+	}
+
+	if farMemBytes > uint64(math.MaxInt) {
+		panic(fmt.Errorf("amount of far memory neighboring nNUMA %d overflows", id))
+	}
+
+	return int(farMemBytes)
 }

@@ -422,6 +422,69 @@ func (m *Manager) allocateCPUs(nNUMAs []int, numToAlloc int) (cpuset.CPUSet, map
 	return allocatedCPUs, cpuGivers
 }
 
+// nNUMAs is the set of nNUMA nodes to allocate `numToAlloc` CPUs from.
+func (m *Manager) allocateCPUs2(nNUMAs []int, numToAlloc int, cacheDist string, wantFarMem bool) (cpuset.CPUSet, map[int]struct{}) {
+	allocatedCPUs := cpuset.New()
+
+	slices.SortFunc(nNUMAs, func(n1ID, n2ID int) int {
+		farMemDiff := m.topo.farMemBytesInNeighbors(n1ID) - m.topo.farMemBytesInNeighbors(n2ID)
+
+		if farMemDiff == 0 {
+			return m.topo.NNUMANodes[n1ID].FreeCPUs.Size() - m.topo.NNUMANodes[n2ID].FreeCPUs.Size()
+		}
+
+		if wantFarMem {
+			return -farMemDiff
+		}
+		return farMemDiff
+	})
+
+	// Set of nNUMAs that actually contribute CPUs to the allocation.
+	cpuGivers := make(map[int]struct{}, len(nNUMAs))
+
+	for _, nID := range nNUMAs {
+		if allocatedCPUs.Size() == numToAlloc {
+			break
+		}
+
+		n := m.topo.NNUMANodes[nID]
+
+		if n.FreeCPUs.IsEmpty() {
+			continue
+		}
+
+		// We still need CPUs, and n has some: we'll allocate from it.
+		cpuGivers[nID] = struct{}{}
+
+		var cs cpuset.CPUSet
+		if allocatedCPUs.Size()+n.FreeCPUs.Size() > numToAlloc {
+			// If we're here, n has more free CPUs than those needed to completely satisfy the
+			// allocation.
+			cpus := make([]int, 0, numToAlloc-allocatedCPUs.Size())
+			for _, fc := range n.FreeCPUs.List() {
+				cpus = append(cpus, fc)
+				if len(cpus)+allocatedCPUs.Size() == numToAlloc {
+					break
+				}
+			}
+			cs = cpuset.New(cpus...)
+		} else {
+			// If we're here, n has less or just enough free CPUs to completely satisfy the
+			// allocation.
+			cs = n.FreeCPUs
+		}
+
+		allocatedCPUs = allocatedCPUs.Union(cs)
+		n.ReservedCPUs = n.ReservedCPUs.Union(cs)
+		n.FreeCPUs = n.FreeCPUs.Difference(cs)
+		m.defaultCPUSetChanged = true
+	}
+
+	heap.Init(m.topo.nNUMAsByFreeCPUs)
+
+	return allocatedCPUs, cpuGivers
+}
+
 func (m *Manager) minNumNNUMAsGivenFreeResources(reqCPUs int, reqMem uint64) int {
 	maxFreeCPUs := m.topo.maxFreeCPUsInSingleNNUMA()
 	minCPUWise := (reqCPUs + maxFreeCPUs - 1) / maxFreeCPUs
