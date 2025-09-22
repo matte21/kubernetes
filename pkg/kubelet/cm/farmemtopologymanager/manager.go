@@ -228,8 +228,10 @@ func (m *Manager) Admit(attrs *lifecycle.PodAdmitAttributes) lifecycle.PodAdmitR
 				}
 
 				if req.farMem == 0 {
-					nNUMAsCombo = nNUMAsGrp
-					return Break
+					if m.candidateBetterThanCurrent(nNUMAsGrp, nNUMAsCombo) {
+						nNUMAsCombo = nNUMAsGrp
+					}
+					return Continue
 				}
 
 				// We need a list of zNUMAs, but we intermediately store them in a map to avoid
@@ -257,8 +259,11 @@ func (m *Manager) Admit(attrs *lifecycle.PodAdmitAttributes) lifecycle.PodAdmitR
 							freeFarMemBytes += m.topo.ZNUMANodes[znID].FreeBytes
 						}
 						if freeFarMemBytes >= req.farMem {
-							nNUMAsCombo = nNUMAsGrp
-							zNUMAsCombo = zNUMAsGrp
+							if m.candidateBetterThanCurrent(nNUMAsGrp, nNUMAsCombo) {
+								nNUMAsCombo = nNUMAsGrp
+								zNUMAsCombo = zNUMAsGrp
+							}
+							// TODO: continue instead. But in our testbeds it's not needed.
 							return Break
 						}
 						klog.InfoS("discarding zNUMAs group", "zNUMAs", zNUMAsGrp, "nNUMAs", nNUMAsGrp)
@@ -266,13 +271,6 @@ func (m *Manager) Admit(attrs *lifecycle.PodAdmitAttributes) lifecycle.PodAdmitR
 					})
 				}
 
-				if len(nNUMAsCombo) > 0 {
-					// we're done.
-					return Break
-				}
-
-				klog.InfoS("discarding nNUMAs group, not enough far memory in the zNUMAs connected to the combo",
-					"nNUMAs", nNUMAsGrp, "far mem request bytes", req.farMem)
 				return Continue
 			})
 
