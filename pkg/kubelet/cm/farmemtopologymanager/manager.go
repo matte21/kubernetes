@@ -296,7 +296,7 @@ func (m *Manager) Admit(attrs *lifecycle.PodAdmitAttributes) lifecycle.PodAdmitR
 		}
 
 		// Allocate CPUs from the selected nNUMAs combo.
-		allocatedCPUs, cpuGivers := m.allocateCPUs2(nNUMAsCombo, req.cpus, req.cpusDistributionOverCaches, req.farMem > 0)
+		allocatedCPUs, cpuGivers := m.allocateCPUs(nNUMAsCombo, req.cpus, req.cpusDistributionOverCaches, req.farMem > 0)
 		alloc.CPUs = allocatedCPUs
 
 		// Allocate local memory.
@@ -374,7 +374,7 @@ func (m *Manager) Admit(attrs *lifecycle.PodAdmitAttributes) lifecycle.PodAdmitR
 
 // nNUMAs is the set of nNUMA nodes to allocate `numToAlloc` CPUs from.
 // TODO: implement dist CPU selection strategy.
-func (m *Manager) allocateCPUs2(nNUMAs []int, numToAlloc int, cacheDist string, wantFarMem bool) (cpuset.CPUSet, map[int]int) {
+func (m *Manager) allocateCPUs(nNUMAs []int, numToAlloc int, cacheDist string, wantFarMem bool) (cpuset.CPUSet, map[int]int) {
 	allocatedCPUs := cpuset.New()
 
 	slices.SortFunc(nNUMAs, func(n1ID, n2ID int) int {
