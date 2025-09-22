@@ -1141,6 +1141,26 @@ func setSysReservedCPUs(t *topology, sysResCPUs cpuset.CPUSet) {
 	for _, n := range t.NNUMANodes {
 		sysResCPUsInN := n.FreeCPUs.Intersection(sysResCPUs)
 		n.FreeCPUs = n.FreeCPUs.Difference(sysResCPUsInN)
+
+		for _, cpu := range sysResCPUsInN.List() {
+			core := n.cpuToCoreAndLLC[cpu].coreID
+			freeCoreCPUs, ok := n.IdleCoresToCPUs[core]
+			if ok {
+				delete(n.IdleCoresToCPUs, core)
+			} else {
+				freeCoreCPUs = n.BusyCoresToFreeCPUs[core]
+			}
+			n.BusyCoresToFreeCPUs[core] = freeCoreCPUs.Difference(cpuset.New(cpu))
+
+			llc := n.cpuToCoreAndLLC[cpu].llcID
+			freeLLCCPUs, ok := n.IdleLLCsToCPUs[llc]
+			if ok {
+				delete(n.IdleLLCsToCPUs, llc)
+			} else {
+				freeLLCCPUs = n.BusyLLCsToFreeCPUs[llc]
+			}
+			n.BusyLLCsToFreeCPUs[llc] = freeLLCCPUs.Difference(cpuset.New(cpu))
+		}
 	}
 }
 
