@@ -297,7 +297,7 @@ func (m *Manager) Admit(attrs *lifecycle.PodAdmitAttributes) lifecycle.PodAdmitR
 		}
 
 		// Allocate CPUs from the selected nNUMAs combo.
-		allocatedCPUs, cpuGivers := m.allocateCPUs(nNUMAsCombo, req.cpus)
+		allocatedCPUs, cpuGivers := m.allocateCPUs2(nNUMAsCombo, req.cpus, req.cpusDistributionOverCaches, req.farMem > 0)
 		alloc.CPUs = allocatedCPUs
 
 		// Allocate local memory.
