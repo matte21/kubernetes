@@ -460,14 +460,7 @@ func (m *Manager) allocateCPUs2(nNUMAs []int, numToAlloc int, cacheDist string, 
 		if allocatedCPUs.Size()+n.FreeCPUs.Size() > numToAlloc {
 			// If we're here, n has more free CPUs than those needed to completely satisfy the
 			// allocation.
-			cpus := make([]int, 0, numToAlloc-allocatedCPUs.Size())
-			for _, fc := range n.FreeCPUs.List() {
-				cpus = append(cpus, fc)
-				if len(cpus)+allocatedCPUs.Size() == numToAlloc {
-					break
-				}
-			}
-			cs = cpuset.New(cpus...)
+			cs = cpuset.New(m.getCPUs(n, numToAlloc-allocatedCPUs.Size(), cacheDist)...)
 		} else {
 			// If we're here, n has less or just enough free CPUs to completely satisfy the
 			// allocation.
@@ -484,6 +477,90 @@ func (m *Manager) allocateCPUs2(nNUMAs []int, numToAlloc int, cacheDist string, 
 	heap.Init(m.topo.nNUMAsByFreeCPUs)
 
 	return allocatedCPUs, cpuGivers
+}
+
+func (m *Manager) getCPUs(n *nNUMANode, numToAlloc int, cacheDist string) []int {
+	switch cacheDist {
+	case LLCShare:
+		return m.getCPUsLLCShare(n, numToAlloc)
+	case L1Share:
+		return m.getCPUsL1Share(n, numToAlloc)
+	case L1Spread:
+		return m.getCPUsL1Spread(n, numToAlloc)
+	}
+	return nil
+}
+
+func (m *Manager) getCPUsLLCShare(n *nNUMANode, remainingToAlloc int) []int {
+	allocated := make([]int, 0, remainingToAlloc)
+	cpusPerLLC := int(m.topo.CPUsPerLLC)
+
+	defer func() {
+		updateCoresAndLLCsMaps(n, allocated)
+	}()
+
+	for _, cpus := range n.IdleLLCsToCPUs {
+		if remainingToAlloc == 0 {
+			return allocated
+		}
+
+		if remainingToAlloc >= cpusPerLLC {
+			allocated = append(allocated, cpus.List()...)
+			remainingToAlloc -= cpusPerLLC
+			continue
+		}
+
+		for _, cpu := range cpus.List() {
+			allocated = append(allocated, cpu)
+			remainingToAlloc--
+			if remainingToAlloc == 0 {
+				return allocated
+			}
+		}
+	}
+
+	if remainingToAlloc == 0 {
+		return allocated
+	}
+
+	busyLLCs := make([]int, 0, len(n.BusyLLCsToFreeCPUs))
+	for llc := range n.BusyLLCsToFreeCPUs {
+		busyLLCs = append(busyLLCs, llc)
+	}
+	slices.SortFunc(busyLLCs, func(x, y int) int {
+		return n.BusyLLCsToFreeCPUs[y].Size() - n.BusyLLCsToFreeCPUs[x].Size()
+	})
+
+	for _, llc := range busyLLCs {
+		if remainingToAlloc == 0 {
+			return allocated
+		}
+
+		cpus := n.BusyLLCsToFreeCPUs[llc]
+		if remainingToAlloc >= cpus.Size() {
+			allocated = append(allocated, cpus.List()...)
+			remainingToAlloc -= cpus.Size()
+			continue
+		}
+
+		for _, cpu := range cpus.List() {
+			allocated = append(allocated, cpu)
+			remainingToAlloc--
+			if remainingToAlloc == 0 {
+				return allocated
+			}
+		}
+	}
+
+	return allocated
+}
+
+func (m *Manager) getCPUsL1Share(n *nNUMANode, numToAlloc int) []int {
+	panic("unimplemented")
+}
+
+func (m *Manager) getCPUsL1Spread(n *nNUMANode, numToAlloc int) []int {
+	panic("unimplemented")
 }
 
 func (m *Manager) minNumNNUMAsGivenFreeResources(reqCPUs int, reqMem uint64) int {
