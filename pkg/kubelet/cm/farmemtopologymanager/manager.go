@@ -1096,33 +1096,9 @@ func getNumSysReservedCPUs(sysReservedQuantities v1.ResourceList) (int, error) {
 }
 
 func getSysReservedCPUs(t *topology, numSysReservedCPUs int) cpuset.CPUSet {
-	// Construct list of all nNUMA nodes IDs.
-	allNNUMAsIDs := make([]int, len(t.NNUMANodes))
 	j := 0
-	for id := range t.NNUMANodes {
-		allNNUMAsIDs[j] = id
-		j++
-	}
-
-	// Sort the list of IDs by ascending order of zNUMA nodes neighboring the nNUMA. Break ties
-	// by ascending ID.
-	// TODO: add comments explaining the rationale for this sorting strategy.
-	sortByNumOfZNUMAsNeighbors := func(n1, n2 int) int {
-		n1zNUMAsNeighbors := len(t.NNUMANodes[n1].NeighborZNUMAs)
-		n2zNUMAsNeighbors := len(t.NNUMANodes[n2].NeighborZNUMAs)
-
-		// Tie breaker.
-		if n1zNUMAsNeighbors == n2zNUMAsNeighbors {
-			return n1 - n2
-		}
-
-		return n1zNUMAsNeighbors - n2zNUMAsNeighbors
-	}
-	slices.SortFunc(allNNUMAsIDs, sortByNumOfZNUMAsNeighbors)
-
 	sysReservedCPUs := make([]int, numSysReservedCPUs)
-	j = 0
-	for _, n := range allNNUMAsIDs {
+	for _, n := range t.NNUMAsSortedByNeighborFarMemory {
 		sortedCPUsInN := t.NNUMANodes[n].FreeCPUs.List()
 		for i := 0; i < len(sortedCPUsInN) && j < numSysReservedCPUs; i++ {
 			sysReservedCPUs[j] = sortedCPUsInN[i]
@@ -1132,7 +1108,6 @@ func getSysReservedCPUs(t *topology, numSysReservedCPUs int) cpuset.CPUSet {
 			break
 		}
 	}
-
 	return cpuset.New(sysReservedCPUs...)
 }
 
