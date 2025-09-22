@@ -382,8 +382,12 @@ func (m *Manager) allocateCPUs(nNUMAs []int, numToAlloc int) (cpuset.CPUSet, map
 	for _, nID := range nNUMAs {
 		n := m.topo.NNUMANodes[nID]
 
-		if allocatedCPUs.Size() == numToAlloc || n.FreeCPUs.IsEmpty() {
+		if allocatedCPUs.Size() == numToAlloc {
 			break
+		}
+
+		if n.FreeCPUs.IsEmpty() {
+			continue
 		}
 
 		// We still need CPUs, and n has some: we'll allocate from it.
