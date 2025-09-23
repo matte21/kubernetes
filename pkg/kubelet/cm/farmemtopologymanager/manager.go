@@ -228,7 +228,7 @@ func (m *Manager) Admit(attrs *lifecycle.PodAdmitAttributes) lifecycle.PodAdmitR
 				}
 
 				if req.farMem == 0 {
-					if m.candidateBetterThanCurrent(nNUMAsGrp, nNUMAsCombo) {
+					if m.candidateBetterThanCurrent(nNUMAsGrp, nNUMAsCombo, false) {
 						nNUMAsCombo = nNUMAsGrp
 					}
 					return Continue
@@ -259,7 +259,7 @@ func (m *Manager) Admit(attrs *lifecycle.PodAdmitAttributes) lifecycle.PodAdmitR
 							freeFarMemBytes += m.topo.ZNUMANodes[znID].FreeBytes
 						}
 						if freeFarMemBytes >= req.farMem {
-							if m.candidateBetterThanCurrent(nNUMAsGrp, nNUMAsCombo) {
+							if m.candidateBetterThanCurrent(nNUMAsGrp, nNUMAsCombo, true) {
 								nNUMAsCombo = nNUMAsGrp
 								zNUMAsCombo = zNUMAsGrp
 							}
@@ -1330,8 +1330,40 @@ func updateCoresAndLLCsMaps(n *nNUMANode, cpus []int) {
 	}
 }
 
-func (m *Manager) candidateBetterThanCurrent(candidate, current []int) bool {
-	if len(current) == 0 || len(candidate) < len(current) {
+func (m *Manager) candidateBetterThanCurrent(candidate, current []int, farMemRequested bool) bool {
+	if len(current) == 0 {
+		return true
+	}
+
+	if !farMemRequested {
+		candidateFarMem := uint64(0)
+		zNUMAsSet := make(map[int]struct{})
+		for _, nID := range candidate {
+			for zN := range m.topo.NNUMANodes[nID].NeighborZNUMAs {
+				if _, alreadySeen := zNUMAsSet[zN]; !alreadySeen {
+					zNUMAsSet[zN] = struct{}{}
+					candidateFarMem += m.topo.ZNUMANodes[nID].AllocatableBytes
+				}
+			}
+		}
+
+		currentFarMem := uint64(0)
+		zNUMAsSet = make(map[int]struct{})
+		for _, nID := range current {
+			for zN := range m.topo.NNUMANodes[nID].NeighborZNUMAs {
+				if _, alreadySeen := zNUMAsSet[zN]; !alreadySeen {
+					zNUMAsSet[zN] = struct{}{}
+					currentFarMem += m.topo.ZNUMANodes[nID].AllocatableBytes
+				}
+			}
+		}
+
+		if candidateFarMem != currentFarMem {
+			return candidateFarMem < currentFarMem
+		}
+	}
+
+	if len(candidate) < len(current) {
 		return true
 	}
 
