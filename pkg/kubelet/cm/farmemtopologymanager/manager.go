@@ -851,6 +851,15 @@ func (m *Manager) AddContainer(p *v1.Pod, c *v1.Container, containerID string) {
 	m.podMap.Add(string(p.UID), c.Name, containerID)
 }
 
+func (m *Manager) SimRemoveContainer(podUID, contName string) error {
+	contID, err := m.podMap.GetContainerID(podUID, contName)
+	if err != nil {
+		// If we're here the container has been already deleted.
+		return nil
+	}
+	return m.RemoveContainer(contID)
+}
+
 func (m *Manager) RemoveContainer(containerID string) error {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
