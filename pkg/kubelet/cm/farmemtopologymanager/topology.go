@@ -131,22 +131,22 @@ type Mem struct {
 
 // TODO: state which symmetry assumptions we make (both in terms of distances and number of NUMAs
 // per socket).
-func initTopology(machineInfo *cadvisor.MachineInfo) *topology {
+func initTopology(mi *cadvisor.MachineInfo) *topology {
 	t := &topology{
 		SocketToNNUMANodesIDs:           make(map[int]map[int]struct{}),
 		NNUMANodes:                      make(map[int]*nNUMANode),
-		NNUMAsSortedByNeighborFarMemory: make([]int, 0, len(machineInfo.Topology)),
+		NNUMAsSortedByNeighborFarMemory: make([]int, 0, len(mi.Topology)),
 		ZNUMANodes:                      make(map[int]*zNUMANode),
 		AllCPUs:                         cpuset.New(),
 		SystemReservedCPUs:              cpuset.New(),
 	}
 
 	// This holds the ACPI SLIT table.
-	distanceMatrix := make(map[int][]uint64, len(machineInfo.Topology))
+	distanceMatrix := make(map[int][]uint64, len(mi.Topology))
 
 	// Populate all n and z NUMAs in the system using cadvisor's topology as source of truth.
 	// Do not set neihghboring relationships yet.
-	for _, numaNode := range machineInfo.Topology {
+	for _, numaNode := range mi.Topology {
 		distanceMatrix[numaNode.Id] = numaNode.Distances
 
 		// TODO: check if the following length is 0 even when we use simulation. Otherwise, we have
