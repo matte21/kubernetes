@@ -3,7 +3,7 @@ package farmemtopologymanager
 import (
 	"container/heap"
 	"context"
-	"encoding/json"
+	//"encoding/json"
 	"fmt"
 	"math"
 	"slices"
@@ -138,11 +138,11 @@ func New(mi *cadvisor.MachineInfo,
 	}
 
 	//! matte21 debug
-	jsonData, err := json.Marshal(*topo)
-	if err != nil {
-		panic(err)
-	}
-	fmt.Println("matte21 dump", string(jsonData))
+	//jsonData, err := json.Marshal(*topo)
+	//if err != nil {
+	//	panic(err)
+	//}
+	//fmt.Println("matte21 dump", string(jsonData))
 	//! matte21 debug
 
 	return &Manager{
