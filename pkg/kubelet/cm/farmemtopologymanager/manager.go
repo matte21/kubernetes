@@ -3,6 +3,7 @@ package farmemtopologymanager
 import (
 	"container/heap"
 	"context"
+
 	//"encoding/json"
 	"fmt"
 	"math"
@@ -189,6 +190,9 @@ func (m *Manager) Admit(attrs *lifecycle.PodAdmitAttributes) lifecycle.PodAdmitR
 		minNumNNUMAs := m.minNumNNUMAsGivenFreeResources(req.cpus, req.localMem)
 		if minNumNNUMAs > req.maxNNUMAs {
 			return lifecycle.PodAdmitResult{Admit: false, Reason: "NeedMoreNUMANodesThanMaxRequested"}
+		}
+		if minNumNNUMAs > len(m.topo.NNUMANodes)+len(m.topo.ZNUMANodes) {
+			return lifecycle.PodAdmitResult{Admit: false, Reason: "NeedMoreNUMANodesThanTotalOnHost"}
 		}
 
 		if minNumNNUMAs > req.minNNUMAs {
@@ -592,9 +596,15 @@ func (m *Manager) getCPUsL1Spread(n *nNUMANode, remainingToAlloc int) []int {
 
 func (m *Manager) minNumNNUMAsGivenFreeResources(reqCPUs int, reqMem uint64) int {
 	maxFreeCPUs := m.topo.maxFreeCPUsInSingleNNUMA()
+	if maxFreeCPUs == 0 {
+		return len(m.topo.NNUMANodes) + len(m.topo.ZNUMANodes) + 1
+	}
 	minCPUWise := (reqCPUs + maxFreeCPUs - 1) / maxFreeCPUs
 
 	maxFreeMem := m.topo.maxFreeMemInSingleNNUMA()
+	if maxFreeMem == 0 {
+		return len(m.topo.NNUMANodes) + len(m.topo.ZNUMANodes) + 1
+	}
 	minMemWise := int((reqMem + maxFreeMem - 1) / maxFreeMem)
 
 	if minMemWise > minCPUWise {
