@@ -205,10 +205,10 @@ func (m *Manager) Admit(attrs *lifecycle.PodAdmitAttributes) lifecycle.PodAdmitR
 		var zNUMAsCombo []int
 		for i := req.minNNUMAs; i <= req.maxNNUMAs; i++ {
 			iterateCombinations(m.topo.NNUMAsSortedByNeighborFarMemory, i, func(nNUMAsGrp []int) LoopControl {
-				if !m.groupIsConnected(nNUMAsGrp) {
-					klog.InfoS("discarding nNUMAs group", "group", nNUMAsGrp, "reason", "disconnected")
-					return Continue
-				}
+				// if !m.groupIsConnected(nNUMAsGrp) {
+				// 	klog.InfoS("discarding nNUMAs group", "group", nNUMAsGrp, "reason", "disconnected")
+				// 	return Continue
+				// }
 
 				freeCPUs := 0
 				freeMemBytes := uint64(0)
@@ -242,15 +242,19 @@ func (m *Manager) Admit(attrs *lifecycle.PodAdmitAttributes) lifecycle.PodAdmitR
 				// duplicates.
 				zNUMAsSet := make(map[int]struct{})
 				zNUMAs := make([]int, 0, 1)
-				for _, nID := range nNUMAsGrp {
-					if m.topo.NNUMANodes[nID].FreeCPUs.Size() > 0 {
-						for zN := range m.topo.NNUMANodes[nID].NeighborZNUMAs {
-							if _, alreadySeen := zNUMAsSet[zN]; !alreadySeen {
-								zNUMAsSet[zN] = struct{}{}
-								zNUMAs = append(zNUMAs, zN)
-							}
-						}
-					}
+				// for _, nID := range nNUMAsGrp {
+				// 	if m.topo.NNUMANodes[nID].FreeCPUs.Size() > 0 {
+				// 		for zN := range m.topo.NNUMANodes[nID].NeighborZNUMAs {
+				// 			if _, alreadySeen := zNUMAsSet[zN]; !alreadySeen {
+				// 				zNUMAsSet[zN] = struct{}{}
+				// 				zNUMAs = append(zNUMAs, zN)
+				// 			}
+				// 		}
+				// 	}
+				// }
+				for zN := range m.topo.ZNUMANodes {
+					zNUMAsSet[zN] = struct{}{}
+					zNUMAs = append(zNUMAs, zN)
 				}
 				// TODO: sort in a better way.
 				slices.Sort(zNUMAs)
@@ -382,16 +386,17 @@ func (m *Manager) allocateCPUs(nNUMAs []int, numToAlloc int, cacheDist string, w
 	allocatedCPUs := cpuset.New()
 
 	slices.SortFunc(nNUMAs, func(n1ID, n2ID int) int {
-		farMemDiff := m.topo.farMemBytesInNeighbors(n1ID) - m.topo.farMemBytesInNeighbors(n2ID)
+		return m.topo.NNUMANodes[n1ID].FreeCPUs.Size() - m.topo.NNUMANodes[n2ID].FreeCPUs.Size()
+		// farMemDiff := m.topo.farMemBytesInNeighbors(n1ID) - m.topo.farMemBytesInNeighbors(n2ID)
 
-		if farMemDiff == 0 {
-			return m.topo.NNUMANodes[n1ID].FreeCPUs.Size() - m.topo.NNUMANodes[n2ID].FreeCPUs.Size()
-		}
+		// if farMemDiff == 0 {
+		// 	return m.topo.NNUMANodes[n1ID].FreeCPUs.Size() - m.topo.NNUMANodes[n2ID].FreeCPUs.Size()
+		// }
 
-		if wantFarMem {
-			return -farMemDiff
-		}
-		return farMemDiff
+		// if wantFarMem {
+		// 	return -farMemDiff
+		// }
+		// return farMemDiff
 	})
 
 	// Set of nNUMAs that actually contribute CPUs to the allocation.
@@ -1354,33 +1359,33 @@ func (m *Manager) candidateBetterThanCurrent(candidate, current []int, farMemReq
 		return true
 	}
 
-	if !farMemRequested {
-		candidateFarMem := uint64(0)
-		zNUMAsSet := make(map[int]struct{})
-		for _, nID := range candidate {
-			for zN := range m.topo.NNUMANodes[nID].NeighborZNUMAs {
-				if _, alreadySeen := zNUMAsSet[zN]; !alreadySeen {
-					zNUMAsSet[zN] = struct{}{}
-					candidateFarMem += m.topo.ZNUMANodes[zN].AllocatableBytes
-				}
-			}
-		}
+	// if !farMemRequested {
+	// 	candidateFarMem := uint64(0)
+	// 	zNUMAsSet := make(map[int]struct{})
+	// 	for _, nID := range candidate {
+	// 		for zN := range m.topo.NNUMANodes[nID].NeighborZNUMAs {
+	// 			if _, alreadySeen := zNUMAsSet[zN]; !alreadySeen {
+	// 				zNUMAsSet[zN] = struct{}{}
+	// 				candidateFarMem += m.topo.ZNUMANodes[zN].AllocatableBytes
+	// 			}
+	// 		}
+	// 	}
 
-		currentFarMem := uint64(0)
-		zNUMAsSet = make(map[int]struct{})
-		for _, nID := range current {
-			for zN := range m.topo.NNUMANodes[nID].NeighborZNUMAs {
-				if _, alreadySeen := zNUMAsSet[zN]; !alreadySeen {
-					zNUMAsSet[zN] = struct{}{}
-					currentFarMem += m.topo.ZNUMANodes[zN].AllocatableBytes
-				}
-			}
-		}
+	// 	currentFarMem := uint64(0)
+	// 	zNUMAsSet = make(map[int]struct{})
+	// 	for _, nID := range current {
+	// 		for zN := range m.topo.NNUMANodes[nID].NeighborZNUMAs {
+	// 			if _, alreadySeen := zNUMAsSet[zN]; !alreadySeen {
+	// 				zNUMAsSet[zN] = struct{}{}
+	// 				currentFarMem += m.topo.ZNUMANodes[zN].AllocatableBytes
+	// 			}
+	// 		}
+	// 	}
 
-		if candidateFarMem != currentFarMem {
-			return candidateFarMem < currentFarMem
-		}
-	}
+	// 	if candidateFarMem != currentFarMem {
+	// 		return candidateFarMem < currentFarMem
+	// 	}
+	// }
 
 	if len(candidate) != len(current) {
 		return len(candidate) < len(current)
