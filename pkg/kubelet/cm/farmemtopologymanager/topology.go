@@ -129,6 +129,127 @@ type Mem struct {
 	FreeBytes           uint64
 }
 
+func simInitTopology(mi *cadvisor.MachineInfo, nNUMAToNeighborZNUMAs map[int]int) *topology {
+	t := &topology{
+		SocketToNNUMANodesIDs:           make(map[int]map[int]struct{}),
+		NNUMANodes:                      make(map[int]*nNUMANode),
+		NNUMAsSortedByNeighborFarMemory: make([]int, 0, len(mi.Topology)),
+		ZNUMANodes:                      make(map[int]*zNUMANode),
+		AllCPUs:                         cpuset.New(),
+		SystemReservedCPUs:              cpuset.New(),
+	}
+
+	// This holds the ACPI SLIT table.
+	distanceMatrix := make(map[int][]uint64, len(mi.Topology))
+
+	// Populate all n and z NUMAs in the system using cadvisor's topology as source of truth.
+	// Do not set neihghboring relationships yet.
+	for _, numaNode := range mi.Topology {
+		distanceMatrix[numaNode.Id] = numaNode.Distances
+
+		// TODO: check if the following length is 0 even when we use simulation. Otherwise, we have
+		// to check how many threads there are as well.
+		if len(numaNode.Cores) == 0 {
+			// If we're here, this NUMA node is a zNUMA.
+			t.addZNUMA(numaNode)
+		} else {
+			// If we're here, this NUMA node is a nNUMA.
+			t.addNNUMA(numaNode)
+		}
+	}
+
+	for _, n := range t.NNUMANodes {
+		for _, cCPUs := range n.IdleCoresToCPUs {
+			t.CPUsPerCore = uint16(cCPUs.Size())
+			break
+		}
+		for _, llcCPUs := range n.IdleLLCsToCPUs {
+			t.CPUsPerLLC = uint16(llcCPUs.Size())
+			break
+		}
+		break
+	}
+
+	// Now initialize the neighboring relationships between nodes.
+	// First, initialize those between n and z NUMAs.
+	// To do that, use Linux sysfs files described here: https://docs.kernel.org/admin-guide/mm/numaperf.html.
+	for nnID, znID := range nNUMAToNeighborZNUMAs {
+		nN := t.NNUMANodes[nnID]
+		zN := t.ZNUMANodes[znID]
+		if _, ok := zN.NeighborNNUMAsBySocket[nN.SocketID]; !ok {
+			zN.NeighborNNUMAsBySocket[nN.SocketID] = make(map[int]struct{}, 1)
+		}
+		zN.NeighborNNUMAsBySocket[nN.SocketID][nnID] = struct{}{}
+		nN.NeighborZNUMAs[znID] = struct{}{}
+	}
+
+	// Finally, initialize neighboring relationships between nNUMAs only.
+
+	// First, handle SNC: if it's enabled, all nNUMAs in the same socket are neighbors.
+	// We don't consider an nNUMA to be neighbor with itself.
+	for s, allNNUMAsInSocket := range t.SocketToNNUMANodesIDs {
+		if len(allNNUMAsInSocket) == 1 {
+			continue
+		}
+		for n1ID := range allNNUMAsInSocket {
+			n1 := t.NNUMANodes[n1ID]
+			for n2ID := range allNNUMAsInSocket {
+				if n2ID != n1ID {
+					if _, ok := n1.NeighborNNUMAsBySocket[s]; !ok {
+						n1.NeighborNNUMAsBySocket[s] = make(map[int]struct{})
+					}
+					n1.NeighborNNUMAsBySocket[s][n2ID] = struct{}{}
+				}
+			}
+		}
+	}
+
+	// Now, handle neighbors outside of the same socket (SNC and non-SNC case are unified).
+	for _, n1 := range t.NNUMANodes {
+		distances := distanceMatrix[n1.ID]
+
+		// Find the minimum distance between this nNUMA and other nNUMAs in different sockets.
+		minDistance := uint64(math.MaxUint64)
+		for s, nIDs := range t.SocketToNNUMANodesIDs {
+			if s == n1.SocketID {
+				continue
+			}
+			for n2ID := range nIDs {
+				if distances[n2ID] < minDistance {
+					minDistance = distances[n2ID]
+				}
+			}
+		}
+
+		// Now, record as neighbors all the nNUMAs with the min distance we have found.
+		for s, nIDs := range t.SocketToNNUMANodesIDs {
+			if s == n1.SocketID {
+				continue
+			}
+			for n2ID := range nIDs {
+				if distances[n2ID] == minDistance {
+					if _, ok := n1.NeighborNNUMAsBySocket[s]; !ok {
+						n1.NeighborNNUMAsBySocket[s] = make(map[int]struct{})
+					}
+					n1.NeighborNNUMAsBySocket[s][n2ID] = struct{}{}
+				}
+			}
+		}
+	}
+
+	// Sort nNUMAs in ascending order of far memory in neighboring zNUMAs.
+	slices.SortFunc(t.NNUMAsSortedByNeighborFarMemory, func(n1, n2 int) int {
+		return t.farMemBytesInNeighbors(n1) - t.farMemBytesInNeighbors(n2)
+	})
+
+	t.nNUMAsByFreeCPUs = newMaxHeap(t, true)
+	t.nNUMAsByFreeMem = newMaxHeap(t, false)
+
+	t.NUMADistanceMatrix = distanceMatrix
+
+	return t
+}
+
 // TODO: state which symmetry assumptions we make (both in terms of distances and number of NUMAs
 // per socket).
 func initTopology(mi *cadvisor.MachineInfo) *topology {

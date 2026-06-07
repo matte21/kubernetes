@@ -122,6 +122,39 @@ func (m *Manager) GetPolicy() topologymanager.Policy {
 	panic("unimplemented")
 }
 
+func SimNew(mi *cadvisor.MachineInfo,
+	specificSystemReservedCPUs cpuset.CPUSet,
+	specificSystemReservedMem []kubeletconfig.MemoryReservation,
+	systemReservedQuantities v1.ResourceList,
+	reconcilePeriod time.Duration,
+	nNUMAToNeighborZNUMAs map[int]int) (*Manager, error) {
+
+	topo := simInitTopology(mi, nNUMAToNeighborZNUMAs)
+
+	if err := claimSystemReservedCPUs(topo, specificSystemReservedCPUs, systemReservedQuantities); err != nil {
+		return nil, fmt.Errorf("failed to build far memory manager: failed to reserve system CPUs: %v", err)
+	}
+
+	if err := claimSystemReservedMem(topo, specificSystemReservedMem, systemReservedQuantities); err != nil {
+		return nil, fmt.Errorf("failed to build far memory manager: failed to reserve system memory: %v", err)
+	}
+
+	//! matte21 debug
+	//jsonData, err := json.Marshal(*topo)
+	//if err != nil {
+	//	panic(err)
+	//}
+	//fmt.Println("matte21 dump", string(jsonData))
+	//! matte21 debug
+
+	return &Manager{
+		podMap:          containermap.NewContainerMap(),
+		allocs:          make(map[string]map[string]Allocation),
+		topo:            topo,
+		reconcilePeriod: reconcilePeriod,
+	}, nil
+}
+
 func New(mi *cadvisor.MachineInfo,
 	specificSystemReservedCPUs cpuset.CPUSet,
 	specificSystemReservedMem []kubeletconfig.MemoryReservation,
