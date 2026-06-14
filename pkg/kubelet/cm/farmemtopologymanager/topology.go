@@ -4,10 +4,7 @@ import (
 	"container/heap"
 	"fmt"
 	"math"
-	"os"
 	"slices"
-	"strconv"
-	"strings"
 
 	_ "k8s.io/kubernetes/pkg/kubelet/cm/topologymanager"
 	"k8s.io/utils/cpuset"
@@ -294,51 +291,33 @@ func initTopology(mi *cadvisor.MachineInfo) *topology {
 	}
 
 	// Now initialize the neighboring relationships between nodes.
-	// First, initialize those between n and z NUMAs.
-	// To do that, use Linux sysfs files described here: https://docs.kernel.org/admin-guide/mm/numaperf.html.
-	// TODO: I strongly suspect that this breaks with our simulation approach. Double-check that.
+	// First, initialize those between n and z NUMAs using the distance matrix.
+	// The neighbors of a zNUMA are the nNUMAs with the minimum distance to it.
 	for _, zN := range t.ZNUMANodes {
-		// zNUMAs might dynamically grow and shrink in terms of memory. In one of the systems I have
-		// access to, if a zNUMA has 0 bytes, there are no access0 and access1 sysfs folders, hence
-		// we can't use those folders for discovering neighboring relationships. But it doesn't
-		// matter: their size is 0, so they'll never be part of an allocation (until they grow
-		// in capactiy, but in that case we have to update the topology).
-		if zN.Mem.TotBytes <= 0 {
-			continue
+		distances := distanceMatrix[zN.ID]
+
+		minDistance := uint64(math.MaxUint64)
+		neighbors := map[int]*nNUMANode{}
+		for nnID, dist := range distances {
+			nn, isNNUMA := t.NNUMANodes[nnID]
+			switch {
+			case !isNNUMA:
+			case dist < minDistance:
+				minDistance = dist
+				neighbors = map[int]*nNUMANode{
+					nnID: nn,
+				}
+			case dist == minDistance:
+				neighbors[nnID] = nn
+			}
 		}
 
-		// TODO: add comment on why we use both index 0 and 1 (in theory we shouldn't, but practice
-		// mandates that).
-		for i := 0; i <= 1; i++ {
-			dir := "/sys/devices/system/node/node" + strconv.Itoa(zN.ID) + "/access" + strconv.Itoa(i) + "/initiators/"
-			files, err := os.ReadDir(dir)
-			if err != nil {
-				panic(fmt.Errorf("failed to list files in %s while findind neighbors for zNUMA node %d: %v", dir, zN.ID, err))
+		for nnID, nn := range neighbors {
+			if _, ok := zN.NeighborNNUMAsBySocket[nn.SocketID]; !ok {
+				zN.NeighborNNUMAsBySocket[nn.SocketID] = make(map[int]struct{}, 1)
 			}
-
-			for _, f := range files {
-				neighborIDStr, ok := strings.CutPrefix(f.Name(), "node")
-				if !ok {
-					continue
-				}
-
-				neighborID, err := strconv.Atoi(neighborIDStr)
-				if err != nil {
-					continue
-				}
-
-				neighbor, ok := t.NNUMANodes[neighborID]
-				if !ok {
-					continue
-				}
-
-				if _, ok := zN.NeighborNNUMAsBySocket[neighbor.SocketID]; !ok {
-					zN.NeighborNNUMAsBySocket[neighbor.SocketID] = make(map[int]struct{}, 1)
-				}
-				zN.NeighborNNUMAsBySocket[neighbor.SocketID][neighborID] = struct{}{}
-
-				neighbor.NeighborZNUMAs[zN.ID] = struct{}{}
-			}
+			zN.NeighborNNUMAsBySocket[nn.SocketID][nnID] = struct{}{}
+			nn.NeighborZNUMAs[zN.ID] = struct{}{}
 		}
 	}
 
